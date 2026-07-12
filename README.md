@@ -176,7 +176,6 @@ This project is for educational and research purposes. For commercial deployment
 This project and its underlying multi-modal data fusion architecture are legally protected under a published patent. 
 
 * **Patent Title:** Multi-Modal Accident Prediction and Real-Time Driver Intervention System
-* **Application/Publication Number:** [Insert Number, e.g., US2026XXXXXXXXA1 or IN2026XXXXXXXX]
 * **Status:** Published
 
 ### 📝 Usage & Licensing
