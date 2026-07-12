@@ -171,6 +171,19 @@ When CRITICAL risk is detected (>75%):
 ## 📝 License
 
 This project is for educational and research purposes. For commercial deployment in vehicles, ensure compliance with automotive safety standards and regulations.
+## 📜 Patent & Intellectual Property
+
+This project and its underlying multi-modal data fusion architecture are legally protected under a published patent. 
+
+* **Patent Title:** Multi-Modal Accident Prediction and Real-Time Driver Intervention System
+* **Application/Publication Number:** [Insert Number, e.g., US2026XXXXXXXXA1 or IN2026XXXXXXXX]
+* **Status:** Published
+
+### 📝 Usage & Licensing
+This repository is provided strictly for **educational, research, and evaluation purposes**. 
+* Commercial deployment, duplication of the underlying predictive algorithms, or integration into production vehicular systems without explicit written permission from the patent owners is strictly prohibited.
+* For licensing inquiries or commercial use, please contact the author via the [Support](#-support) section.
+
 
 ## 🤝 Contributing
 
