@@ -1,13 +1,7 @@
 # 🚗 Fusion-Based Accident Predictor for Drivers
 
 A comprehensive multi-modal AI system that predicts accident probability by analyzing driver behavior, vehicle dynamics, audio stress, and GPS context in real-time.
-![Patent](https://img.shields.io/badge/Patent-Published-success)
-![Python](https://img.shields.io/badge/Python-3.11-blue)
-![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-green)
-![MediaPipe](https://img.shields.io/badge/MediaPipe-Face%20Tracking-orange)
-![Streamlit](https://img.shields.io/badge/Streamlit-Web%20Dashboard-red)
-![Google Gemini](https://img.shields.io/badge/Google-Gemini-blueviolet)
-![License](https://img.shields.io/badge/License-Research-lightgrey)
+![Website](https://fusion-based-accident-predictor-git-sxessmhqxtumnmchqiw7kj.streamlit.app/)
 
 ## 🎯 Key Features
 
