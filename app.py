@@ -61,7 +61,11 @@ def speak_alert(text):
 # ==========================================
 # 2. AI SETUP (Official Google Library)
 # ==========================================
-GEMINI_API_KEY = "AIzaSyADPgT3Qk-OBcQwqIpgc9oQ8XARsy4Rpt8"
+# Try to get API key from Streamlit secrets (for cloud), fallback to hardcoded (for local)
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    GEMINI_API_KEY = "AIzaSyADPgT3Qk-OBcQwqIpgc9oQ8XARsy4Rpt8"
 
 def get_gemini_response(prompt):
     """Get AI response from Gemini API"""
