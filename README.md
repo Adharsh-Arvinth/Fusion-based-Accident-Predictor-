@@ -1,12 +1,5 @@
 # 🚗 Proactive Multimodal Fusion-Based Accident Predictor System for Drivers
 
-## 🌐 Live Demo
-
-🚀 **Try the live application here:**
-
-**🔗 Streamlit Demo:**  
-https://fusion-based-accident-predictor-git-sxessmhqxtumnmchqiw7kj.streamlit.app/
-
 > 🚀 **Patent Published**
 >
 > **Proactive Multimodal Fusion-Based Accident Predictor System for Drivers** is an AI-powered Advanced Driver Assistance System (ADAS) that predicts accident probability before a collision occurs by intelligently combining driver behavior, vehicle dynamics, audio stress, GPS context, and historical driving patterns into a unified multimodal risk prediction engine.
