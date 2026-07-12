@@ -117,12 +117,19 @@ Trip completed successfully - AI coaching will be available once connection is r
 # ==========================================
 # 3. OPENCV SETUP
 # ==========================================
+face_cascade = None
+eye_cascade = None
 try:
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-except:
-    st.error("OpenCV Error. Please reinstall opencv-python.")
-    st.stop()
+    haarcascade_path = cv2.data.haarcascades if hasattr(cv2, 'data') and cv2.data.haarcascades else ''
+    face_cascade = cv2.CascadeClassifier(haarcascade_path + 'haarcascade_frontalface_default.xml')
+    eye_cascade = cv2.CascadeClassifier(haarcascade_path + 'haarcascade_eye.xml')
+    if face_cascade.empty():
+        face_cascade = None
+    if eye_cascade.empty():
+        eye_cascade = None
+except Exception:
+    face_cascade = None
+    eye_cascade = None
 
 # ==========================================
 # 4. ENHANCED FUSION LOGIC WITH ALL INPUTS
@@ -1262,14 +1269,14 @@ elif st.session_state["view_mode"] == "dashboard":
             # --- A. OPENCV VISION ---
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5) if face_cascade is not None else ()
             eyes_detected = 0
             
             if len(faces) > 0:
                 for (x,y,w,h) in faces:
                     cv2.rectangle(rgb, (x,y), (x+w,y+h), (100,100,100), 2)
                     roi_gray = gray[y:y+int(h/2), x:x+w] # Top half of face
-                    eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity)
+                    eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity) if eye_cascade is not None else ()
                     eyes_detected = len(eyes)
                     for (ex,ey,ew,eh) in eyes:
                         cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,0), 2)
