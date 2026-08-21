@@ -1,10 +1,10 @@
-# Fusion — Proactive Multimodal Accident Predictor for Drivers
+# 🚗 Proactive Multimodal Fusion-Based Accident Predictor
 
-An AI-powered Advanced Driver Assistance System (ADAS) that fuses driver facial behavior, vehicle dynamics, cabin audio stress, and GPS context to predict accident risk in real time. 🚗⚠️
+<p align="center">
 
-> 🚀 **Patent Published**
->
-> **Proactive Multimodal Fusion-Based Accident Predictor System for Drivers** is an AI-powered Advanced Driver Assistance System (ADAS) that predicts accident probability before a collision occurs [...]
+### 🏆 Patent Published | 🤖 AI-Powered ADAS | 🚘 Road Safety
+
+**A real-time multimodal AI system that proactively predicts accident risk by intelligently fusing driver behavior, vehicle dynamics, audio stress, GPS context, and historical driving patterns.**
 
 ---
 
