@@ -1,5 +1,4 @@
-<img width="649" height="78" alt="image" src="https://github.com/user-attachments/assets/2d9a8326-b4bd-4285-b910-0530d711965f" /># A Proactive Multimodal Fusion-Based Accident Predictor System for a Driver
-
+A Proactive Multimodal Fusion-Based Accident Predictor System for a Driver
 
 > 🚀 **Patent Published**
 >
