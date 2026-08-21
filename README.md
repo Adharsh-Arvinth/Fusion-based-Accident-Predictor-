@@ -1,4 +1,4 @@
-# 🚗 Proactive Multimodal Fusion-Based Accident Predictor
+# 🚗 A Proactive Multimodal Fusion-Based Accident Predictor System for a Driver
 
 <p align="center">
 
