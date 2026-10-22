@@ -1466,6 +1466,7 @@ elif st.session_state["view_mode"] == "dashboard":
     with cam_col:
         st.markdown("**Driver Vision Feed**")
         cam_place = st.empty()
+        cam_status_place = st.empty()
     with map_col:
         st.markdown("**GPS & Accident Zones**")
         map_place = st.empty()
@@ -1616,351 +1617,350 @@ elif st.session_state["view_mode"] == "dashboard":
 
                 if force_drowsy: current_eye_state = "DROWSY"
 
-            if force_rage:
-                facial_stress["stress_state"] = "RAGE"
-                facial_stress["emotion"] = "Extreme Road Rage"
-                facial_stress["jaw_clench"] = True
-                audio_stress["shouting_detected"] = True
-                audio_stress["stress_level"] = "HIGH"
-                audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
+                # --- H. DRIVER STATE (Enhanced with Stress) ---
+                driver_state = {
+                    "eye_state": current_eye_state,
+                    "facial_tension": facial_stress["facial_tension"],
+                    "facial_stress": facial_stress,
+                    "stress_state": facial_stress["stress_state"],
+                    "emotion": facial_stress["emotion"]
+                }
+
+                # --- H. MULTI-MODAL FUSION ENGINE ---
+                risk_label, risk_val, risk_color, risk_factors = calculate_fusion_risk(
+                    driver_state, vehicle_dynamics, audio_stress, gps_context, user_history
+                )
+                if force_critical: 
+                    risk_val, risk_label, risk_color = 95, "CRITICAL", "bad"
+                    risk_factors = ["FORCED TEST MODE - CRITICAL"]
+
+                # --- I. AI VOICE ALERTS & EMERGENCY CALLING ---
+                if risk_val > 75: # CRITICAL
+                    # Get emergency contacts for display
+                    contacts_list = st.session_state["emergency_contacts"]
+                    contacts_display = "<br>".join([f"📞 {c['name']}: {c['phone']}" for c in contacts_list[:5]])
+                
+                    emergency_banner.markdown(f"""
+                    <div class='emergency-box'>
+                        🚨 <strong>CRITICAL ACCIDENT RISK DETECTED!</strong><br><br>
+                        <strong>EMERGENCY PROTOCOL ACTIVATED</strong><br><br>
+                        📞 Calling Emergency Services & Contacts:<br>
+                        {contacts_display}<br><br>
+                        🚗 Auto-Brakes Applied | 💺 Seat Belts Tightened<br>
+                        📍 GPS Location: {gps_context['lat']:.4f}, {gps_context['lon']:.4f}<br>
+                        🚨 Hazard Lights Activated
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                    # Trigger emergency call (once per critical event)
+                    if not emergency_triggered:
+                        emergency_data = trigger_emergency_call(gps_context, risk_factors, contacts_list)
+                        st.session_state["emergency_log"].append(emergency_data)
+                        emergency_triggered = True
+                
+                    # Voice Alert (Every 7 seconds to not overlap)
+                    if time.time() - last_voice_alert > 7:
+                        speak_alert("Critical Warning. Accident Imminent. Emergency services and contacts have been notified. Please pull over safely.", voice_placeholder)
+                        last_voice_alert = time.time()
+
+                elif risk_val > 50: # HIGH
+                    emergency_banner.markdown("""
+                    <div class='warning-box'>
+                        ⚠️ <strong>HIGH RISK WARNING</strong><br>
+                        Multiple Risk Factors Detected - Please Reduce Speed and Stay Alert
+                    </div>
+                    """, unsafe_allow_html=True)
+                    emergency_triggered = False  # Reset for next critical event
+                
+                    if time.time() - last_voice_alert > 8:
+                        speak_alert("High Risk Warning. Please slow down and stay alert.", voice_placeholder)
+                        last_voice_alert = time.time()
+                else:
+                    emergency_banner.empty()
+                    emergency_triggered = False
             
-            # --- H. DRIVER STATE (Enhanced with Stress) ---
-            driver_state = {
-                "eye_state": current_eye_state,
-                "facial_tension": facial_stress["facial_tension"],
-                "facial_stress": facial_stress,
-                "stress_state": facial_stress["stress_state"],
-                "emotion": facial_stress["emotion"]
-            }
-
-            # --- H. MULTI-MODAL FUSION ENGINE ---
-            risk_label, risk_val, risk_color, risk_factors = calculate_fusion_risk(
-                driver_state, vehicle_dynamics, audio_stress, gps_context, user_history
-            )
-            if force_critical: 
-                risk_val, risk_label, risk_color = 95, "CRITICAL", "bad"
-                risk_factors = ["FORCED TEST MODE - CRITICAL"]
-
-            # --- I. AI VOICE ALERTS & EMERGENCY CALLING ---
-            if risk_val > 75: # CRITICAL
-                # Get emergency contacts for display
-                contacts_list = st.session_state["emergency_contacts"]
-                contacts_display = "<br>".join([f"📞 {c['name']}: {c['phone']}" for c in contacts_list[:5]])
-                
-                emergency_banner.markdown(f"""
-                <div class='emergency-box'>
-                    🚨 <strong>CRITICAL ACCIDENT RISK DETECTED!</strong><br><br>
-                    <strong>EMERGENCY PROTOCOL ACTIVATED</strong><br><br>
-                    📞 Calling Emergency Services & Contacts:<br>
-                    {contacts_display}<br><br>
-                    🚗 Auto-Brakes Applied | 💺 Seat Belts Tightened<br>
-                    📍 GPS Location: {gps_context['lat']:.4f}, {gps_context['lon']:.4f}<br>
-                    🚨 Hazard Lights Activated
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Trigger emergency call (once per critical event)
-                if not emergency_triggered:
-                    emergency_data = trigger_emergency_call(gps_context, risk_factors, contacts_list)
-                    st.session_state["emergency_log"].append(emergency_data)
-                    emergency_triggered = True
-                
-                # Voice Alert (Every 7 seconds to not overlap)
-                if time.time() - last_voice_alert > 7:
-                    speak_alert("Critical Warning. Accident Imminent. Emergency services and contacts have been notified. Please pull over safely.", voice_placeholder)
+                # --- ADDITIONAL VOICE ALERTS FOR STRESS & SHOUTING ---
+                if facial_stress["stress_state"] == "RAGE" and time.time() - last_voice_alert > 10:
+                    speak_alert("Driver stress level critical. Please take deep breaths and stay calm.", voice_placeholder)
+                    last_voice_alert = time.time()
+            
+                if audio_stress["shouting_detected"] and audio_stress["shout_count"] > 2 and time.time() - last_voice_alert > 12:
+                    speak_alert("Elevated voice detected. Please remain calm for safe driving.", voice_placeholder)
                     last_voice_alert = time.time()
 
-            elif risk_val > 50: # HIGH
-                emergency_banner.markdown("""
-                <div class='warning-box'>
-                    ⚠️ <strong>HIGH RISK WARNING</strong><br>
-                    Multiple Risk Factors Detected - Please Reduce Speed and Stay Alert
+                # --- J. UI DASHBOARD UPDATES WITH DETAILED METRICS ---
+                # Primary KPIs with detailed information
+                risk_box.markdown(f"""
+                <div class='kpi-card'>
+                    <div class='kpi-icon'>🎯</div>
+                    <div class='kpi-label'>Fusion Risk Score</div>
+                    <div class='kpi-value {"status-danger" if risk_val > 75 else "status-warning" if risk_val > 50 else "status-safe"}'>{risk_val}%</div>
+                    <div class='kpi-sublabel'>
+                        <span class='{"badge-danger" if risk_val > 75 else "badge-warning" if risk_val > 50 else "badge-safe"}'>{risk_label}</span>
+                    </div>
+                    <div class='data-grid' style='margin-top: 12px;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Threshold</span>
+                            <span class='data-value'>75% Critical</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Status</span>
+                            <span class='data-value'>{"🔴 Alert" if risk_val > 75 else "🟡 Monitor" if risk_val > 50 else "🟢 Safe"}</span>
+                        </div>
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
-                emergency_triggered = False  # Reset for next critical event
+            
+                speed_color = "status-danger" if sim_speed > gps_context["speed_limit"] else "status-safe"
+                speed_box.markdown(f"""
+                <div class='kpi-card'>
+                    <div class='kpi-icon'>🚗</div>
+                    <div class='kpi-label'>Vehicle Speed</div>
+                    <div class='kpi-value {speed_color}'>{sim_speed} <span style='font-size: 18px;'>km/h</span></div>
+                    <div class='kpi-sublabel'>
+                        Speed Limit: {gps_context['speed_limit']} km/h
+                    </div>
+                    <div class='data-grid' style='margin-top: 12px;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Avg Speed</span>
+                            <span class='data-value'>{int(sum(d.get("speed", 0) for d in st.session_state["trip_data"][-10:]) / max(len(st.session_state["trip_data"][-10:]), 1))} km/h</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Violations</span>
+                            <span class='data-value'>{sum(1 for d in st.session_state["trip_data"] if d.get("speed", 0) > 80)}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+                e_col = "status-danger" if current_eye_state == "DROWSY" else "status-safe"
+                stress_col = "status-danger" if facial_stress["stress_state"] == "RAGE" else "status-warning" if facial_stress["stress_state"] == "STRESSED" else "status-safe"
+                stress_emoji = "😡" if facial_stress["stress_state"] == "RAGE" else "😰" if facial_stress["stress_state"] == "STRESSED" else "😌"
+            
+                with eye_box.container():
+                    st.markdown(f"""
+                    <div class='kpi-card'>
+                        <div class='kpi-icon'>👁️</div>
+                        <div class='kpi-label'>DRIVER MONITORING</div>
+                        <div class='kpi-value {e_col}'>{current_eye_state}</div>
+                        <div class='kpi-sublabel'>
+                            <span class='{"badge-danger" if facial_stress["stress_state"] == "RAGE" else "badge-warning" if facial_stress["stress_state"] == "STRESSED" else "badge-safe"}' style='font-size: 16px; padding: 8px 16px;'>
+                                {stress_emoji} {facial_stress["stress_state"]} - {facial_stress["emotion"]}
+                            </span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
-                if time.time() - last_voice_alert > 8:
-                    speak_alert("High Risk Warning. Please slow down and stay alert.", voice_placeholder)
-                    last_voice_alert = time.time()
-            else:
-                emergency_banner.empty()
-                emergency_triggered = False
+                    # Use Streamlit metrics instead of HTML
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Stress Level", f"{facial_stress['stress_level']:.0%}")
+                        st.metric("Jaw Clench", "⚠️ YES" if facial_stress["jaw_clench"] else "✓ No")
+                        st.metric("Drowsy Events", sum(1 for d in st.session_state["trip_data"] if d.get("eye_state") == "DROWSY"))
+                    with col2:
+                        st.metric("Facial Tension", f"{driver_state['facial_tension']:.0%}")
+                        st.metric("Eyebrow Furrow", "⚠️ YES" if facial_stress["eyebrow_furrow"] else "✓ No")
+                        st.metric("Stress Duration", f"{facial_stress['stress_duration']} frames")
             
-            # --- ADDITIONAL VOICE ALERTS FOR STRESS & SHOUTING ---
-            if facial_stress["stress_state"] == "RAGE" and time.time() - last_voice_alert > 10:
-                speak_alert("Driver stress level critical. Please take deep breaths and stay calm.", voice_placeholder)
-                last_voice_alert = time.time()
+                zone_color = "status-danger" if gps_context["zone_risk"] == "High" else ("status-warning" if gps_context["zone_risk"] == "Medium" else "status-safe")
+                loc_box.markdown(f"""
+                <div class='kpi-card'>
+                    <div class='kpi-icon'>📍</div>
+                    <div class='kpi-label'>GPS Zone</div>
+                    <div class='kpi-value {zone_color}' style='font-size: 20px;'>{gps_context['zone_name']}</div>
+                    <div class='kpi-sublabel'>
+                        <span class='{"badge-danger" if gps_context["zone_risk"] == "High" else "badge-warning" if gps_context["zone_risk"] == "Medium" else "badge-safe"}'>{gps_context['zone_risk']} Risk</span>
+                    </div>
+                    <div class='data-grid' style='margin-top: 12px;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Coordinates</span>
+                            <span class='data-value'>{gps_context['lat']:.4f}, {gps_context['lon']:.4f}</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Weather</span>
+                            <span class='data-value'>{gps_context['weather_risk']}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
             
-            if audio_stress["shouting_detected"] and audio_stress["shout_count"] > 2 and time.time() - last_voice_alert > 12:
-                speak_alert("Elevated voice detected. Please remain calm for safe driving.", voice_placeholder)
-                last_voice_alert = time.time()
+                # Vehicle & Audio Metrics with detailed data
+                steer_color = "status-danger" if vehicle_dynamics["aggressive_steering"] else "status-safe"
+                steering_box.markdown(f"""
+                <div class='kpi-card'>
+                    <div class='kpi-icon'>🎮</div>
+                    <div class='kpi-label'>Steering Behavior</div>
+                    <div class='kpi-value {steer_color}'>{abs(vehicle_dynamics['steering_angle']):.1f}°</div>
+                    <div class='kpi-sublabel'>
+                        {'⚠️ Aggressive' if vehicle_dynamics['aggressive_steering'] else '✓ Normal'}
+                    </div>
+                    <div class='data-grid' style='margin-top: 12px;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Jerks Detected</span>
+                            <span class='data-value'>{sum(1 for d in st.session_state["trip_data"] if d.get("steering", 0) > 10)}</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Smoothness</span>
+                            <span class='data-value'>{"Low" if vehicle_dynamics['aggressive_steering'] else "High"}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+                brake_color = "status-danger" if vehicle_dynamics["harsh_braking"] else "status-safe"
+                brake_box.markdown(f"""
+                <div class='kpi-card'>
+                    <div class='kpi-icon'>🛑</div>
+                    <div class='kpi-label'>Braking Force</div>
+                    <div class='kpi-value {brake_color}'>{vehicle_dynamics['brake_force']:.0%}</div>
+                    <div class='kpi-sublabel'>
+                        {'⚠️ Harsh Braking' if vehicle_dynamics['harsh_braking'] else '✓ Normal'}
+                    </div>
+                    <div class='data-grid' style='margin-top: 12px;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Harsh Events</span>
+                            <span class='data-value'>{sum(1 for d in st.session_state["trip_data"] if d.get("brake", 0) > 0.7)}</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Avg Force</span>
+                            <span class='data-value'>{int(sum(d.get("brake", 0) for d in st.session_state["trip_data"][-10:]) / max(len(st.session_state["trip_data"][-10:]), 1) * 100)}%</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+                audio_color = "status-danger" if audio_stress["stress_level"] == "HIGH" else ("status-warning" if audio_stress["stress_level"] == "MEDIUM" else "status-safe")
+            
+                with audio_box.container():
+                    st.markdown(f"""
+                    <div class='kpi-card'>
+                        <div class='kpi-icon'>🎤</div>
+                        <div class='kpi-label'>VOICE & AUDIO ANALYSIS</div>
+                        <div class='kpi-value {audio_color}'>{audio_stress['stress_level']}</div>
+                        <div class='kpi-sublabel'>
+                            <span class='{"badge-danger" if audio_stress["shouting_detected"] else "badge-safe"}' style='font-size: 16px; padding: 8px 16px;'>
+                                {"🔊 SHOUTING!" if audio_stress['shouting_detected'] else "🔇 Calm Voice"}
+                            </span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                    # Use Streamlit metrics instead of HTML
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Stress Value", f"{audio_stress['stress_value']:.0%}")
+                        st.metric("Voice Pitch", f"{audio_stress['voice_pitch']:.0f} Hz")
+                        st.metric("Shout Count", f"⚠️ {audio_stress['shout_count']}")
+                    with col2:
+                        st.metric("Cabin Noise", f"{audio_stress['cabin_noise']:.0f} dB")
+                        st.metric("Agitation", audio_stress['voice_agitation'])
+            
+                weather_color = "status-danger" if gps_context["weather_risk"] == "Poor" else "status-safe"
+                weather_box.markdown(f"""
+                <div class='kpi-card'>
+                    <div class='kpi-icon'>🌤️</div>
+                    <div class='kpi-label'>Weather Conditions</div>
+                    <div class='kpi-value {weather_color}' style='font-size: 22px;'>{gps_context['weather_risk']}</div>
+                    <div class='kpi-sublabel'>
+                        Road Conditions
+                    </div>
+                    <div class='data-grid' style='margin-top: 12px;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Visibility</span>
+                            <span class='data-value'>{"Low" if gps_context['weather_risk'] == "Poor" else "Good"}</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Road Grip</span>
+                            <span class='data-value'>{"Reduced" if gps_context['weather_risk'] == "Poor" else "Normal"}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+                # Camera Feed
+                cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
+                cv2.putText(rgb, f"RISK: {risk_val}% ({risk_label})", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0) if risk_val > 50 else (0,255,0), 2)
+                cam_place.image(rgb, channels="RGB", use_container_width=True)
+            
+                # GPS Map with Accident Zones
+                map_data = pd.DataFrame({
+                    'lat': [current_lat] + [z["lat"] for z in ACCIDENT_PRONE_ZONES],
+                    'lon': [current_lon] + [z["lon"] for z in ACCIDENT_PRONE_ZONES],
+                    'type': ['Current'] + [z["risk"] for z in ACCIDENT_PRONE_ZONES]
+                })
+                map_place.map(map_data, zoom=13, use_container_width=True)
+            
+                # Risk Factors Display with detailed information
+                if risk_factors:
+                    factors_html = "<div class='risk-factors-box'>"
+                    factors_html += "<div class='risk-factor-header'>⚠️ Active Risk Factors Detected</div>"
+                    for idx, factor in enumerate(risk_factors, 1):
+                        factors_html += f"<div class='risk-factor-item'><strong>{idx}.</strong> {factor}</div>"
+                    factors_html += f"""
+                    <div style='margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0;'>
+                        <div class='data-row'>
+                            <span class='data-label'>Total Factors</span>
+                            <span class='data-value'>{len(risk_factors)}</span>
+                        </div>
+                        <div class='data-row'>
+                            <span class='data-label'>Risk Level</span>
+                            <span class='data-value'>{risk_label}</span>
+                        </div>
+                        <div class='data-row' style='border: none;'>
+                            <span class='data-label'>Action Required</span>
+                            <span class='data-value'>{"Immediate" if risk_val > 75 else "Monitor" if risk_val > 50 else "None"}</span>
+                        </div>
+                    </div>
+                    """
+                    factors_html += "</div>"
+                    risk_factors_box.markdown(factors_html, unsafe_allow_html=True)
+                else:
+                    risk_factors_box.markdown(f"""
+                    <div class='safe-status'>
+                        ✓ All Systems Normal - Safe Driving Conditions
+                        <div style='margin-top: 10px; font-size: 12px; opacity: 0.8;'>
+                            No risk factors detected • Trip duration: {len(st.session_state["trip_data"])}s
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+                # Data Logging
+                st.session_state["trip_data"].append({
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "speed": sim_speed,
+                    "risk": risk_val,
+                    "status": risk_label,
+                    "lat": current_lat,
+                    "lon": current_lon,
+                    "zone": gps_context["zone_name"],
+                    "eye_state": current_eye_state,
+                    "stress_state": facial_stress["stress_state"],
+                    "emotion": facial_stress["emotion"],
+                    "facial_tension": facial_stress["facial_tension"],
+                    "steering": vehicle_dynamics["steering_angle"],
+                    "brake": vehicle_dynamics["brake_force"],
+                    "audio_stress": audio_stress["stress_level"],
+                    "shouting": audio_stress["shouting_detected"],
+                    "shout_count": audio_stress["shout_count"]
+                })
+            
+                # Camera
+                cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
+                cam_place.image(rgb, channels="RGB", use_container_width=True)
+                cam_status_place.markdown(f"<div style='text-align: center; color: #10b981; font-weight: 600; font-size: 13px; margin-top: 4px;'>🟢 Live AI Vision Active • Telemetry Step {frame_count}</div>", unsafe_allow_html=True)
+            
+                # GPS Map Update
+                map_data = pd.DataFrame({'lat': [current_lat], 'lon': [current_lon]})
+                map_place.map(map_data, zoom=14, use_container_width=True)
+            
+                # Balanced delay: Fast enough for smooth camera, slow enough to prevent flickering
+                time.sleep(0.1)  # 10 FPS - smooth camera feed with stable dashboard
 
-            # --- J. UI DASHBOARD UPDATES WITH DETAILED METRICS ---
-            # Primary KPIs with detailed information
-            risk_box.markdown(f"""
-            <div class='kpi-card'>
-                <div class='kpi-icon'>🎯</div>
-                <div class='kpi-label'>Fusion Risk Score</div>
-                <div class='kpi-value {"status-danger" if risk_val > 75 else "status-warning" if risk_val > 50 else "status-safe"}'>{risk_val}%</div>
-                <div class='kpi-sublabel'>
-                    <span class='{"badge-danger" if risk_val > 75 else "badge-warning" if risk_val > 50 else "badge-safe"}'>{risk_label}</span>
-                </div>
-                <div class='data-grid' style='margin-top: 12px;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Threshold</span>
-                        <span class='data-value'>75% Critical</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Status</span>
-                        <span class='data-value'>{"🔴 Alert" if risk_val > 75 else "🟡 Monitor" if risk_val > 50 else "🟢 Safe"}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            speed_color = "status-danger" if sim_speed > gps_context["speed_limit"] else "status-safe"
-            speed_box.markdown(f"""
-            <div class='kpi-card'>
-                <div class='kpi-icon'>🚗</div>
-                <div class='kpi-label'>Vehicle Speed</div>
-                <div class='kpi-value {speed_color}'>{sim_speed} <span style='font-size: 18px;'>km/h</span></div>
-                <div class='kpi-sublabel'>
-                    Speed Limit: {gps_context['speed_limit']} km/h
-                </div>
-                <div class='data-grid' style='margin-top: 12px;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Avg Speed</span>
-                        <span class='data-value'>{int(sum(d.get("speed", 0) for d in st.session_state["trip_data"][-10:]) / max(len(st.session_state["trip_data"][-10:]), 1))} km/h</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Violations</span>
-                        <span class='data-value'>{sum(1 for d in st.session_state["trip_data"] if d.get("speed", 0) > 80)}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            e_col = "status-danger" if current_eye_state == "DROWSY" else "status-safe"
-            stress_col = "status-danger" if facial_stress["stress_state"] == "RAGE" else "status-warning" if facial_stress["stress_state"] == "STRESSED" else "status-safe"
-            stress_emoji = "😡" if facial_stress["stress_state"] == "RAGE" else "😰" if facial_stress["stress_state"] == "STRESSED" else "😌"
-            
-            with eye_box.container():
-                st.markdown(f"""
-                <div class='kpi-card'>
-                    <div class='kpi-icon'>👁️</div>
-                    <div class='kpi-label'>DRIVER MONITORING</div>
-                    <div class='kpi-value {e_col}'>{current_eye_state}</div>
-                    <div class='kpi-sublabel'>
-                        <span class='{"badge-danger" if facial_stress["stress_state"] == "RAGE" else "badge-warning" if facial_stress["stress_state"] == "STRESSED" else "badge-safe"}' style='font-size: 16px; padding: 8px 16px;'>
-                            {stress_emoji} {facial_stress["stress_state"]} - {facial_stress["emotion"]}
-                        </span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Use Streamlit metrics instead of HTML
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Stress Level", f"{facial_stress['stress_level']:.0%}")
-                    st.metric("Jaw Clench", "⚠️ YES" if facial_stress["jaw_clench"] else "✓ No")
-                    st.metric("Drowsy Events", sum(1 for d in st.session_state["trip_data"] if d.get("eye_state") == "DROWSY"))
-                with col2:
-                    st.metric("Facial Tension", f"{driver_state['facial_tension']:.0%}")
-                    st.metric("Eyebrow Furrow", "⚠️ YES" if facial_stress["eyebrow_furrow"] else "✓ No")
-                    st.metric("Stress Duration", f"{facial_stress['stress_duration']} frames")
-            
-            zone_color = "status-danger" if gps_context["zone_risk"] == "High" else ("status-warning" if gps_context["zone_risk"] == "Medium" else "status-safe")
-            loc_box.markdown(f"""
-            <div class='kpi-card'>
-                <div class='kpi-icon'>📍</div>
-                <div class='kpi-label'>GPS Zone</div>
-                <div class='kpi-value {zone_color}' style='font-size: 20px;'>{gps_context['zone_name']}</div>
-                <div class='kpi-sublabel'>
-                    <span class='{"badge-danger" if gps_context["zone_risk"] == "High" else "badge-warning" if gps_context["zone_risk"] == "Medium" else "badge-safe"}'>{gps_context['zone_risk']} Risk</span>
-                </div>
-                <div class='data-grid' style='margin-top: 12px;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Coordinates</span>
-                        <span class='data-value'>{gps_context['lat']:.4f}, {gps_context['lon']:.4f}</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Weather</span>
-                        <span class='data-value'>{gps_context['weather_risk']}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Vehicle & Audio Metrics with detailed data
-            steer_color = "status-danger" if vehicle_dynamics["aggressive_steering"] else "status-safe"
-            steering_box.markdown(f"""
-            <div class='kpi-card'>
-                <div class='kpi-icon'>🎮</div>
-                <div class='kpi-label'>Steering Behavior</div>
-                <div class='kpi-value {steer_color}'>{abs(vehicle_dynamics['steering_angle']):.1f}°</div>
-                <div class='kpi-sublabel'>
-                    {'⚠️ Aggressive' if vehicle_dynamics['aggressive_steering'] else '✓ Normal'}
-                </div>
-                <div class='data-grid' style='margin-top: 12px;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Jerks Detected</span>
-                        <span class='data-value'>{sum(1 for d in st.session_state["trip_data"] if d.get("steering", 0) > 10)}</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Smoothness</span>
-                        <span class='data-value'>{"Low" if vehicle_dynamics['aggressive_steering'] else "High"}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            brake_color = "status-danger" if vehicle_dynamics["harsh_braking"] else "status-safe"
-            brake_box.markdown(f"""
-            <div class='kpi-card'>
-                <div class='kpi-icon'>🛑</div>
-                <div class='kpi-label'>Braking Force</div>
-                <div class='kpi-value {brake_color}'>{vehicle_dynamics['brake_force']:.0%}</div>
-                <div class='kpi-sublabel'>
-                    {'⚠️ Harsh Braking' if vehicle_dynamics['harsh_braking'] else '✓ Normal'}
-                </div>
-                <div class='data-grid' style='margin-top: 12px;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Harsh Events</span>
-                        <span class='data-value'>{sum(1 for d in st.session_state["trip_data"] if d.get("brake", 0) > 0.7)}</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Avg Force</span>
-                        <span class='data-value'>{int(sum(d.get("brake", 0) for d in st.session_state["trip_data"][-10:]) / max(len(st.session_state["trip_data"][-10:]), 1) * 100)}%</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            audio_color = "status-danger" if audio_stress["stress_level"] == "HIGH" else ("status-warning" if audio_stress["stress_level"] == "MEDIUM" else "status-safe")
-            
-            with audio_box.container():
-                st.markdown(f"""
-                <div class='kpi-card'>
-                    <div class='kpi-icon'>🎤</div>
-                    <div class='kpi-label'>VOICE & AUDIO ANALYSIS</div>
-                    <div class='kpi-value {audio_color}'>{audio_stress['stress_level']}</div>
-                    <div class='kpi-sublabel'>
-                        <span class='{"badge-danger" if audio_stress["shouting_detected"] else "badge-safe"}' style='font-size: 16px; padding: 8px 16px;'>
-                            {"🔊 SHOUTING!" if audio_stress['shouting_detected'] else "🔇 Calm Voice"}
-                        </span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Use Streamlit metrics instead of HTML
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Stress Value", f"{audio_stress['stress_value']:.0%}")
-                    st.metric("Voice Pitch", f"{audio_stress['voice_pitch']:.0f} Hz")
-                    st.metric("Shout Count", f"⚠️ {audio_stress['shout_count']}")
-                with col2:
-                    st.metric("Cabin Noise", f"{audio_stress['cabin_noise']:.0f} dB")
-                    st.metric("Agitation", audio_stress['voice_agitation'])
-            
-            weather_color = "status-danger" if gps_context["weather_risk"] == "Poor" else "status-safe"
-            weather_box.markdown(f"""
-            <div class='kpi-card'>
-                <div class='kpi-icon'>🌤️</div>
-                <div class='kpi-label'>Weather Conditions</div>
-                <div class='kpi-value {weather_color}' style='font-size: 22px;'>{gps_context['weather_risk']}</div>
-                <div class='kpi-sublabel'>
-                    Road Conditions
-                </div>
-                <div class='data-grid' style='margin-top: 12px;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Visibility</span>
-                        <span class='data-value'>{"Low" if gps_context['weather_risk'] == "Poor" else "Good"}</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Road Grip</span>
-                        <span class='data-value'>{"Reduced" if gps_context['weather_risk'] == "Poor" else "Normal"}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Camera Feed
-            cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
-            cv2.putText(rgb, f"RISK: {risk_val}% ({risk_label})", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0) if risk_val > 50 else (0,255,0), 2)
-            cam_place.image(rgb, channels="RGB", use_container_width=True)
-            
-            # GPS Map with Accident Zones
-            map_data = pd.DataFrame({
-                'lat': [current_lat] + [z["lat"] for z in ACCIDENT_PRONE_ZONES],
-                'lon': [current_lon] + [z["lon"] for z in ACCIDENT_PRONE_ZONES],
-                'type': ['Current'] + [z["risk"] for z in ACCIDENT_PRONE_ZONES]
-            })
-            map_place.map(map_data, zoom=13, use_container_width=True)
-            
-            # Risk Factors Display with detailed information
-            if risk_factors:
-                factors_html = "<div class='risk-factors-box'>"
-                factors_html += "<div class='risk-factor-header'>⚠️ Active Risk Factors Detected</div>"
-                for idx, factor in enumerate(risk_factors, 1):
-                    factors_html += f"<div class='risk-factor-item'><strong>{idx}.</strong> {factor}</div>"
-                factors_html += f"""
-                <div style='margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0;'>
-                    <div class='data-row'>
-                        <span class='data-label'>Total Factors</span>
-                        <span class='data-value'>{len(risk_factors)}</span>
-                    </div>
-                    <div class='data-row'>
-                        <span class='data-label'>Risk Level</span>
-                        <span class='data-value'>{risk_label}</span>
-                    </div>
-                    <div class='data-row' style='border: none;'>
-                        <span class='data-label'>Action Required</span>
-                        <span class='data-value'>{"Immediate" if risk_val > 75 else "Monitor" if risk_val > 50 else "None"}</span>
-                    </div>
-                </div>
-                """
-                factors_html += "</div>"
-                risk_factors_box.markdown(factors_html, unsafe_allow_html=True)
-            else:
-                risk_factors_box.markdown(f"""
-                <div class='safe-status'>
-                    ✓ All Systems Normal - Safe Driving Conditions
-                    <div style='margin-top: 10px; font-size: 12px; opacity: 0.8;'>
-                        No risk factors detected • Trip duration: {len(st.session_state["trip_data"])}s
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Data Logging
-            st.session_state["trip_data"].append({
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "speed": sim_speed,
-                "risk": risk_val,
-                "status": risk_label,
-                "lat": current_lat,
-                "lon": current_lon,
-                "zone": gps_context["zone_name"],
-                "eye_state": current_eye_state,
-                "stress_state": facial_stress["stress_state"],
-                "emotion": facial_stress["emotion"],
-                "facial_tension": facial_stress["facial_tension"],
-                "steering": vehicle_dynamics["steering_angle"],
-                "brake": vehicle_dynamics["brake_force"],
-                "audio_stress": audio_stress["stress_level"],
-                "shouting": audio_stress["shouting_detected"],
-                "shout_count": audio_stress["shout_count"]
-            })
-            
-            # Camera
-            cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
-            cam_place.image(rgb, channels="RGB", use_container_width=True)
-            
-            # GPS Map Update
-            map_data = pd.DataFrame({'lat': [current_lat], 'lon': [current_lon]})
-            map_place.map(map_data, zoom=14, use_container_width=True)
-            
-            # Balanced delay: Fast enough for smooth camera, slow enough to prevent flickering
-            time.sleep(0.1)  # 10 FPS - smooth camera feed with stable dashboard
+                # Auto-transition to AI Safety Report after 300 simulation steps (~30s), or stop anytime via button
+                if using_sim and frame_count >= 300:
+                    st.session_state["is_monitoring"] = False
+                    st.session_state["view_mode"] = "report"
+                    st.rerun()
 
         finally:
             if cap is not None:
@@ -2027,6 +2027,7 @@ elif st.session_state["view_mode"] == "dashboard":
 
         preview_frame = generate_simulated_driver_frame("ALERT", {"stress_state": "CALM"}, 0)
         cam_place.image(preview_frame, channels="RGB", use_container_width=True)
+        cam_status_place.markdown("<div style='text-align: center; color: #64748b; font-size: 13px; margin-top: 4px;'>⚪ Vision Feed Idle • Click 'START TRIP' to begin</div>", unsafe_allow_html=True)
 
         map_df = pd.DataFrame({'lat': [12.9165], 'lon': [79.1325]})
         map_place.map(map_df, zoom=14, use_container_width=True)
@@ -2046,7 +2047,11 @@ elif st.session_state["view_mode"] == "report":
     """, unsafe_allow_html=True)
     
     if not st.session_state["trip_data"]:
-        st.warning("⚠️ No trip data recorded. Go back and press Start Trip.")
+        st.warning("⚠️ No trip data recorded yet. Please start a trip to view comprehensive AI analysis.")
+        if st.button("▶ Start New Trip", type="primary", use_container_width=True):
+            st.session_state["view_mode"] = "dashboard"
+            st.session_state["is_monitoring"] = True
+            st.rerun()
     else:
         # Emergency Log Display
         if st.session_state["emergency_log"]:
