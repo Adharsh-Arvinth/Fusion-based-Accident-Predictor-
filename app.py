@@ -1646,35 +1646,55 @@ elif st.session_state["view_mode"] == "dashboard":
                     if not ret:
                         using_sim = True
                         continue
+                    # Flip frame so it mirrors like a selfie camera
+                    frame = cv2.flip(frame, 1)
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    # Histogram equalization improves eye detection in varied lighting
+                    gray = cv2.equalizeHist(gray)
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     faces = []
                     eyes_detected = 0
                     if cascades_available and face_cascade is not None:
-                        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                        # Try multiple scales for better face detection
+                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(60, 60))
                         if len(faces) > 0:
-                            for (x,y,w,h) in faces:
-                                cv2.rectangle(rgb, (x,y), (x+w,y+h), (0,255,0), 2)
-                                roi_gray = gray[y:y+int(h/2), x:x+w]
-                                eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity)
-                                eyes_detected = max(eyes_detected, len(eyes))
-                                for (ex,ey,ew,eh) in eyes:
-                                    cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,255), 2)
+                            # Pick the largest face (most likely the driver)
+                            faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[:1]
+                            for (x, y, w, h) in faces:
+                                cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                                # Scan top 60% of face for eyes (avoids mouth/chin noise)
+                                eye_roi_gray = gray[y:y+int(h*0.6), x:x+w]
+                                # minNeighbors=3 is more lenient for real-world lighting
+                                eyes = eye_cascade.detectMultiScale(eye_roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
+                                eyes_detected = len(eyes)
+                                for (ex, ey, ew, eh) in eyes:
+                                    cv2.rectangle(rgb[y:y+int(h*0.6), x:x+w], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                            # Overlay eye count on frame
+                            eye_label = f"EYES: {eyes_detected} DETECTED" if eyes_detected > 0 else "EYES: CLOSED / NOT FOUND"
+                            eye_color = (0, 255, 100) if eyes_detected >= 2 else (0, 165, 255) if eyes_detected == 1 else (0, 0, 255)
+                            cv2.putText(rgb, eye_label, (10, rgb.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.55, eye_color, 2)
+                        else:
+                            cv2.putText(rgb, "NO FACE DETECTED - Look at camera", (10, rgb.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
                     else:
                         faces = [1]
                         eyes_detected = 2
 
                 # --- C. BUFFER LOGIC FOR DROWSINESS ---
+                # Requires eyes missing for 2 consecutive seconds before declaring DROWSY
                 if len(faces) > 0 and eyes_detected < 2:
-                    if drowsy_start_time is None: drowsy_start_time = time.time()
-                    elif time.time() - drowsy_start_time > 1.5: current_eye_state = "DROWSY"
+                    if drowsy_start_time is None:
+                        drowsy_start_time = time.time()
+                    drowsy_elapsed = time.time() - drowsy_start_time
+                    if drowsy_elapsed > 2.0:
+                        current_eye_state = "DROWSY"
+                    elif drowsy_elapsed > 0.5:
+                        # Eyes partially closed / blinking - show warning state
+                        current_eye_state = "DROWSY" if current_eye_state == "DROWSY" else "ALERT"
                 else:
                     drowsy_start_time = None
                     current_eye_state = "ALERT"
 
-                if force_drowsy: current_eye_state = "DROWSY"
-
-                # --- H. DRIVER STATE (Enhanced with Stress) ---
+                if force_drowsy: current_eye_state = "DROWSY" # --- H. DRIVER STATE (Enhanced with Stress) ---
                 driver_state = {
                     "eye_state": current_eye_state,
                     "facial_tension": facial_stress["facial_tension"],
@@ -2004,7 +2024,13 @@ elif st.session_state["view_mode"] == "dashboard":
                 # Camera
                 cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
                 cam_place.image(rgb, channels="RGB", use_container_width=True)
-                cam_status_place.markdown(f"<div style='text-align: center; color: #10b981; font-weight: 600; font-size: 13px; margin-top: 4px;'>🟢 Live AI Vision Active • Telemetry Step {frame_count}</div>", unsafe_allow_html=True)
+                eye_status_icon = "😴 DROWSY" if current_eye_state == "DROWSY" else f"👁 Eyes: {eyes_detected if not using_sim else '—'}"
+                eye_status_color = "#ef4444" if current_eye_state == "DROWSY" else "#10b981"
+                cam_status_place.markdown(
+                    f"<div style='text-align: center; color: {eye_status_color}; font-weight: 600; font-size: 13px; margin-top: 4px;'>"
+                    f"🟢 Live AI • Step {frame_count} &nbsp;|&nbsp; {eye_status_icon}</div>",
+                    unsafe_allow_html=True
+                )
             
                 # GPS Map Update (Rendered every 8 frames to save cloud CPU and prevent throttling)
                 if frame_count % 8 == 1 or frame_count == 1:
@@ -2015,11 +2041,9 @@ elif st.session_state["view_mode"] == "dashboard":
                 loop_delay = 0.05 if (cap and cap.isOpened()) else 0.20
                 time.sleep(loop_delay)
 
-                # Auto-transition to AI Safety Report after 150 simulation steps (~30s), or stop anytime via button
-                if (using_sim or browser_mode) and frame_count >= 150:
-                    st.session_state["is_monitoring"] = False
-                    st.session_state["view_mode"] = "report"
-                    st.rerun()
+                # Check if user clicked STOP TRIP button (via session_state flag)
+                if not st.session_state.get("is_monitoring", True):
+                    break
 
         finally:
             if cap is not None:
