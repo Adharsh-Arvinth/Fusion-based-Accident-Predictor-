@@ -1664,15 +1664,20 @@ elif st.session_state["view_mode"] == "dashboard":
                                 cv2.rectangle(rgb[0 : int(user_bgr.shape[0] * 0.65), :], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
                                 
                         eyes_detected = len(eyes)
-                        # In photo mode: 0 eyes = DROWSY, 1+ eyes = ALERT
-                        if eyes_detected == 0:
-                            current_eye_state = "DROWSY"
-                            eye_label = "EYES: CLOSED (DROWSY DETECTED)"
-                            eye_color = (0, 0, 255)
-                        else:
+                        # An alert driver must have BOTH eyes clearly open (eyes_detected >= 2).
+                        # If 0 or 1 eye is detected (sleepy/closed eyes, glasses glare, drooping eyelid),
+                        # the driver is DROWSY.
+                        if eyes_detected >= 2:
                             current_eye_state = "ALERT"
-                            eye_label = f"EYES: {eyes_detected} OPEN (ALERT)"
+                            eye_label = f"EYES: {eyes_detected}/2 OPEN (ALERT)"
                             eye_color = (0, 255, 100)
+                        else:
+                            current_eye_state = "DROWSY"
+                            if eyes_detected == 0:
+                                eye_label = "EYES: 0/2 CLOSED (DROWSY DETECTED!)"
+                            else:
+                                eye_label = "EYES: 1/2 DROOPING / SLEEPY (DROWSY!)"
+                            eye_color = (0, 0, 255)
                             
                         cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
                         status_color = (0, 0, 255) if current_eye_state == "DROWSY" else (0, 255, 0)
@@ -1730,21 +1735,24 @@ elif st.session_state["view_mode"] == "dashboard":
                     eyes_detected = len(eyes)
                     
                     # --- C. BUFFER LOGIC FOR DROWSINESS ---
-                    if eyes_detected >= 1:
-                        # At least one open eye detected -> Driver is ALERT
+                    # To be ALERT, BOTH eyes must be open (eyes_detected >= 2).
+                    # If eyes < 2 for more than 400ms (blinks are < 300ms), declare DROWSY!
+                    if eyes_detected >= 2:
                         drowsy_start_time = None
                         current_eye_state = "ALERT"
-                        eye_label = f"EYES: {eyes_detected} OPEN (ALERT)"
+                        eye_label = f"EYES: {eyes_detected}/2 OPEN (ALERT)"
                         eye_color = (0, 255, 100)
                     else:
-                        # 0 eyes detected -> Eyes are closed!
                         if drowsy_start_time is None:
                             drowsy_start_time = time.time()
                         closed_duration = time.time() - drowsy_start_time
                         
-                        if closed_duration >= 0.6:  # 600ms threshold for micro-sleep/drowsy
+                        if closed_duration >= 0.4:  # 400ms threshold
                             current_eye_state = "DROWSY"
-                            eye_label = f"EYES: CLOSED ({closed_duration:.1f}s) - DROWSY!"
+                            if eyes_detected == 0:
+                                eye_label = f"EYES: CLOSED ({closed_duration:.1f}s) - DROWSY!"
+                            else:
+                                eye_label = f"EYES: DROOPING ({closed_duration:.1f}s) - DROWSY!"
                             eye_color = (0, 0, 255)
                         else:
                             eye_label = f"EYES: BLINKING ({closed_duration:.1f}s)"
