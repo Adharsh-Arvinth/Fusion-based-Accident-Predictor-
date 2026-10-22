@@ -1300,33 +1300,16 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Settings</h3>", unsafe_allow_html=True)
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Driver Monitoring Mode</h3>", unsafe_allow_html=True)
 
-# Auto-detect whether a local physical camera is accessible on this machine
-if "local_cam_ok" not in st.session_state:
-    try:
-        _chk = cv2.VideoCapture(0)
-        st.session_state["local_cam_ok"] = bool(_chk and _chk.isOpened())
-        if _chk:
-            _chk.release()
-    except Exception:
-        st.session_state["local_cam_ok"] = False
-
-has_local_cam = st.session_state.get("local_cam_ok", False)
-
 camera_options = [
-    "Live Laptop Webcam (Real Face Detection)",
-    "Browser Camera (Real Face Scan)",
-    "Simulated Driver Demo (Virtual Driver)"
-] if has_local_cam else [
-    "Browser Camera (Real Face Scan)",
-    "Live Laptop Webcam (Localhost Only)",
-    "Simulated Driver Demo (Virtual Driver)"
+    "Live Driver Webcam (Continuous Vision)",
+    "Simulated Driver Demo (Virtual Telemetry)"
 ]
 
 camera_source = st.sidebar.selectbox(
     "Monitoring Input",
     camera_options,
     index=0,
-    help="Select 'Live Laptop Webcam' to stream your real face in real time, or 'Browser Camera' to capture your real face via the browser."
+    help="Select 'Live Driver Webcam' for real-time continuous eye and drowsiness tracking via your laptop webcam."
 )
 
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>🧪 Simulation Scenarios</h3>", unsafe_allow_html=True)
@@ -1512,12 +1495,8 @@ elif st.session_state["view_mode"] == "dashboard":
     # MIDDLE ROW: Camera & GPS Map
     st.markdown("<div class='section-header'><span class='section-icon'>📹</span>Live Monitoring Systems</div>", unsafe_allow_html=True)
     cam_col, map_col = st.columns([1, 1])
-    browser_photo = None
     with cam_col:
-        st.markdown("**Driver Vision Feed**")
-        if "Browser Camera" in camera_source:
-            st.caption("📸 Allow camera access below, then click **Take Photo** to scan your face:")
-            browser_photo = st.camera_input("Scan driver face", key="browser_cam_input", label_visibility="collapsed")
+        st.markdown("**Driver Vision Feed (Live Eye & Drowsiness Tracking)**")
         cam_place = st.empty()
         cam_status_place = st.empty()
     with map_col:
@@ -1554,15 +1533,11 @@ elif st.session_state["view_mode"] == "dashboard":
         # Determine camera capture mode
         cap = None
         using_sim = False
-        browser_mode = ("Browser Camera" in camera_source)
         
         if "Simulated Driver" in camera_source:
             using_sim = True
-        elif browser_mode:
-            # Browser Camera Mode: uses st.camera_input snapshot of real face
-            using_sim = False
         else:
-            # Live Hardware Webcam Mode: try direct hardware capture (localhost)
+            # Live Hardware Webcam Mode: direct real-time video capture
             try:
                 cap = cv2.VideoCapture(0)
                 if cap and cap.isOpened():
@@ -1580,7 +1555,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 cap = None
                 
             if using_sim:
-                st.warning("⚠️ Live hardware webcam stream is active when running locally on your laptop (`RUN_APP.bat`). On Streamlit Cloud, switch to **'Browser Camera (Real Face Scan)'** in the sidebar to scan your real face directly in your browser.")
+                st.info("ℹ️ Running in ADAS virtual telemetry mode. When running locally on your laptop (`RUN_APP.bat`), your live camera will stream continuously.")
 
         step = 0
         frame_count = 0
@@ -1604,7 +1579,7 @@ elif st.session_state["view_mode"] == "dashboard":
         rgb = create_adas_hud_preview() 
 
         try:
-            while (cap and cap.isOpened()) or using_sim or browser_mode:
+            while (cap and cap.isOpened()) or using_sim:
                 frame_count += 1
                 
                 # --- A. UPDATE SIMULATION TELEMETRY ---
@@ -1639,79 +1614,7 @@ elif st.session_state["view_mode"] == "dashboard":
                     audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
 
                 # --- B. ACQUIRE / RENDER DRIVER VISION ---
-                if browser_mode:
-                    if browser_photo is not None:
-                        photo_bytes = np.asarray(bytearray(browser_photo.getvalue()), dtype=np.uint8)
-                        user_bgr = cv2.imdecode(photo_bytes, cv2.IMREAD_COLOR)
-                        gray = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2GRAY)
-                        rgb = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2RGB)
-                        
-                        # 1. Detect face (alt2 first, default fallback)
-                        faces = []
-                        if face_alt2_cascade is not None and not face_alt2_cascade.empty():
-                            faces = face_alt2_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(35, 35))
-                        if len(faces) == 0 and face_cascade is not None:
-                            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(35, 35))
-                        
-                        both_open = False
-                        eyes_detected = 0
-                        
-                        if len(faces) > 0:
-                            (x, y, w, h) = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
-                            cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                            
-                            # Smart eye band: upper 12% to 55% of face
-                            eye_roi_gray = gray[y + int(h*0.12) : y + int(h*0.55), x : x+w]
-                            eye_roi_rgb = rgb[y + int(h*0.12) : y + int(h*0.55), x : x+w]
-                            roi_w = eye_roi_gray.shape[1]
-                            
-                            calibrated_sens = max(2, int(sensitivity))
-                            eyes = eye_cascade.detectMultiScale(
-                                eye_roi_gray, scaleFactor=1.1, minNeighbors=calibrated_sens, minSize=(12, 12)
-                            )
-                            if len(eyes) == 0 and eye_glasses_cascade is not None:
-                                eyes = eye_glasses_cascade.detectMultiScale(
-                                    eye_roi_gray, scaleFactor=1.1, minNeighbors=calibrated_sens, minSize=(12, 12)
-                                )
-                                
-                            midpoint = roi_w * 0.5
-                            left_eyes = [e for e in eyes if (e[0] + e[2]/2.0) < midpoint]
-                            right_eyes = [e for e in eyes if (e[0] + e[2]/2.0) >= midpoint]
-                            
-                            for (ex, ey, ew, eh) in eyes:
-                                cv2.rectangle(eye_roi_rgb, (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
-                                
-                            eyes_detected = len(eyes)
-                            # Strict ADAS bilateral rule: Driver is ALERT only if BOTH left and right eyes are open!
-                            both_open = (len(left_eyes) >= 1 and len(right_eyes) >= 1)
-                        
-                        if both_open:
-                            current_eye_state = "ALERT"
-                            eye_label = f"EYES: BOTH OPEN ({eyes_detected} DETECTED) - ALERT"
-                            eye_color = (0, 255, 100)
-                            status_color = (0, 255, 0)
-                        else:
-                            current_eye_state = "DROWSY"
-                            if len(faces) == 0:
-                                eye_label = "DRIVER NOT DETECTED (DROWSY / DISTRACTED)"
-                            elif eyes_detected == 0:
-                                eye_label = "EYES: BOTH CLOSED (DROWSY DETECTED!)"
-                            else:
-                                eye_label = "EYES: 1 CLOSED / DROOPING (DROWSY DETECTED!)"
-                            eye_color = (255, 50, 50)
-                            status_color = (255, 50, 50)
-                            
-                        cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
-                        cv2.putText(rgb, f"STATUS: {current_eye_state}", (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, status_color, 2)
-                        cam_place.image(rgb, channels="RGB", use_container_width=True)
-                    else:
-                        # Waiting for user to click 'Take Photo' - show clean ADAS HUD (no cartoon)
-                        hud = create_adas_hud_preview()
-                        cam_place.image(hud, channels="RGB", use_container_width=True)
-                        faces = [1]
-                        eyes_detected = 2
-                        current_eye_state = "ALERT"
-                elif using_sim:
+                if using_sim:
                     hud = create_adas_hud_preview()
                     cam_place.image(hud, channels="RGB", use_container_width=True)
                     faces = [1]
@@ -2108,8 +2011,8 @@ elif st.session_state["view_mode"] == "dashboard":
                     "shout_count": audio_stress["shout_count"]
                 })
             
-                # Camera (skip rendering if browser_mode — already rendered above with real face)
-                if not browser_mode:
+                # Camera (render real-time live vision frame)
+                if not using_sim:
                     status_col = (255, 50, 50) if current_eye_state == "DROWSY" else (0, 255, 0)
                     cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
                     cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.85, status_col, 2)
