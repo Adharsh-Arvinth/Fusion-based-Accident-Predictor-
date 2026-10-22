@@ -1539,15 +1539,48 @@ elif st.session_state["view_mode"] == "dashboard":
         # Initialize simulators
         vehicle_sim = st.session_state["vehicle_sim"]
         audio_sim = st.session_state["audio_sim"]
+        facial_stress_detector = st.session_state["facial_stress_detector"]
         
         emergency_triggered = False 
 
         try:
             while (cap and cap.isOpened()) or using_sim:
                 frame_count += 1
+                
+                # --- A. UPDATE SIMULATION TELEMETRY ---
+                if time.time() - last_sim_update > 1.5:
+                    step += 1
+                    # Simulate GPS Movement (move through accident zones)
+                    current_lat += random.uniform(-0.001, 0.001)
+                    current_lon += random.uniform(-0.001, 0.001)
+                    
+                    # Simulate Speed changes
+                    if step < 10: sim_speed = random.randint(35, 50)
+                    elif step < 20: sim_speed = random.randint(75, 95)  # High speed phase
+                    else: sim_speed = random.randint(25, 40)
+                    last_sim_update = time.time()
+
+                gps_context = get_gps_context(current_lat, current_lon, sim_speed)
+                vehicle_dynamics = vehicle_sim.update(sim_speed, 50 if current_eye_state == "DROWSY" else 20)
+                audio_stress = audio_sim.analyze(50 if current_eye_state == "DROWSY" else 20)
+                
+                facial_stress = facial_stress_detector.analyze_facial_stress(
+                    face_detected=True,
+                    eye_state=current_eye_state,
+                    risk_level=50 if current_eye_state == "DROWSY" else 20
+                )
+                
+                if force_rage:
+                    facial_stress["stress_state"] = "RAGE"
+                    facial_stress["emotion"] = "Extreme Road Rage"
+                    facial_stress["jaw_clench"] = True
+                    audio_stress["shouting_detected"] = True
+                    audio_stress["stress_level"] = "HIGH"
+                    audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
+
+                # --- B. ACQUIRE / RENDER DRIVER VISION ---
                 if using_sim:
-                    current_stress_obj = facial_stress_detector.stress_history[-1] if hasattr(facial_stress_detector, 'stress_history') and facial_stress_detector.stress_history else {"stress_state": "CALM"}
-                    rgb = generate_simulated_driver_frame(current_eye_state, current_stress_obj if isinstance(current_stress_obj, dict) else {}, frame_count)
+                    rgb = generate_simulated_driver_frame(current_eye_state, facial_stress, frame_count)
                     faces = [1]
                     eyes_detected = 0 if current_eye_state == "DROWSY" else 2
                 else:
@@ -1573,45 +1606,16 @@ elif st.session_state["view_mode"] == "dashboard":
                         faces = [1]
                         eyes_detected = 2
 
-            # --- B. BUFFER LOGIC ---
-            if len(faces) > 0 and eyes_detected < 2:
-                if drowsy_start_time is None: drowsy_start_time = time.time()
-                elif time.time() - drowsy_start_time > 1.5: current_eye_state = "DROWSY"
-            else:
-                drowsy_start_time = None
-                current_eye_state = "ALERT"
+                # --- C. BUFFER LOGIC FOR DROWSINESS ---
+                if len(faces) > 0 and eyes_detected < 2:
+                    if drowsy_start_time is None: drowsy_start_time = time.time()
+                    elif time.time() - drowsy_start_time > 1.5: current_eye_state = "DROWSY"
+                else:
+                    drowsy_start_time = None
+                    current_eye_state = "ALERT"
 
-            if force_drowsy: current_eye_state = "DROWSY"
+                if force_drowsy: current_eye_state = "DROWSY"
 
-            # --- C. SIMULATION (Speed & GPS) ---
-            if time.time() - last_sim_update > 1.5:
-                step += 1
-                # Simulate GPS Movement (move through accident zones)
-                current_lat += random.uniform(-0.001, 0.001)
-                current_lon += random.uniform(-0.001, 0.001)
-                
-                # Simulate Speed changes
-                if step < 10: sim_speed = random.randint(35, 50)
-                elif step < 20: sim_speed = random.randint(75, 95)  # High speed phase
-                else: sim_speed = random.randint(25, 40)
-                last_sim_update = time.time()
-
-            # --- D. GET GPS CONTEXT ---
-            gps_context = get_gps_context(current_lat, current_lon, sim_speed)
-            
-            # --- E. VEHICLE DYNAMICS ---
-            vehicle_dynamics = vehicle_sim.update(sim_speed, 50 if current_eye_state == "DROWSY" else 20)
-            
-            # --- F. AUDIO STRESS ANALYSIS ---
-            audio_stress = audio_sim.analyze(50 if current_eye_state == "DROWSY" else 20)
-            
-            # --- G. FACIAL STRESS & EMOTION DETECTION (NEW) ---
-            facial_stress_detector = st.session_state["facial_stress_detector"]
-            facial_stress = facial_stress_detector.analyze_facial_stress(
-                face_detected=True,
-                eye_state=current_eye_state,
-                risk_level=50 if current_eye_state == "DROWSY" else 20
-            )
             if force_rage:
                 facial_stress["stress_state"] = "RAGE"
                 facial_stress["emotion"] = "Extreme Road Rage"
