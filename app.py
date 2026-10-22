@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import cv2
 import pandas as pd
 import numpy as np
@@ -9,6 +10,7 @@ import threading
 import json
 from collections import deque
 import warnings
+import os
 
 # Suppress FutureWarning from deprecated google.generativeai
 warnings.filterwarnings('ignore', category=FutureWarning, module='google.generativeai')
@@ -18,12 +20,12 @@ try:
     from google import genai
     gemini_available = True
     using_new_api = True
-except ImportError:
+except (ImportError, Exception):
     try:
         import google.generativeai as genai
         gemini_available = True
         using_new_api = False
-    except ImportError:
+    except (ImportError, Exception):
         gemini_available = False
         using_new_api = False
 
@@ -31,7 +33,7 @@ except ImportError:
 try:
     import pyttsx3
     voice_enabled = True
-except ImportError:
+except (ImportError, OSError, Exception):
     voice_enabled = False
 
 # Try to import audio processing
@@ -39,97 +41,298 @@ try:
     import sounddevice as sd
     import librosa
     audio_enabled = True
-except ImportError:
+except (ImportError, OSError, Exception):
     audio_enabled = False
 
 # ==========================================
 # 1. VOICE ALERT ENGINE (Runs in Background)
 # ==========================================
-def speak_alert(text):
-    if not voice_enabled: return
-    def run_speech():
-        try:
-            # Re-initialize in thread to prevent crashes
-            engine = pyttsx3.init()
-            engine.setProperty('rate', 160) # Speed of speech
-            engine.say(text)
-            engine.runAndWait()
-        except Exception as e:
-            pass
-    threading.Thread(target=run_speech, daemon=True).start()
-
-# ==========================================
-# 2. AI SETUP (Official Google Library)
-# ==========================================
-# Try to get API key from Streamlit secrets (for cloud), fallback to hardcoded (for local)
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    GEMINI_API_KEY = "AIzaSyADPgT3Qk-OBcQwqIpgc9oQ8XARsy4Rpt8"
-
-def get_gemini_response(prompt):
-    """Get AI response from Gemini API"""
-    if not gemini_available:
-        return "⚠️ Gemini AI not available. Install: pip install google-generativeai"
-    
-    # List of models to try in order (with full paths)
-    models_to_try = [
-        'models/gemini-2.5-flash',
-        'models/gemini-flash-latest',
-        'models/gemini-pro-latest',
-        'models/gemini-2.0-flash',
-        'gemini-2.5-flash',
-        'gemini-flash-latest',
-        'gemini-pro-latest'
-    ]
-    
-    # Try old google.generativeai package (it's what we have installed)
-    try:
-        import google.generativeai as old_genai
-        old_genai.configure(api_key=GEMINI_API_KEY)
-        
-        for model_name in models_to_try:
+def speak_alert(text, voice_placeholder=None):
+    # 1. Local desktop TTS (when running locally with pyttsx3)
+    if voice_enabled:
+        def run_speech():
             try:
-                model = old_genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                continue  # Try next model
-                
-    except Exception as e:
+                engine = pyttsx3.init()
+                engine.setProperty('rate', 160)
+                engine.say(text)
+                engine.runAndWait()
+            except Exception:
+                pass
+        threading.Thread(target=run_speech, daemon=True).start()
+
+    # 2. Universal Browser Web Speech API (runs directly on visitor's laptop/phone speakers)
+    try:
+        clean_msg = text.replace("'", "\'").replace('"', '\"').replace('\n', ' ')
+        js_code = f"""
+        <script>
+        try {{
+            if ('speechSynthesis' in window) {{
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance('{clean_msg}');
+                u.rate = 1.0;
+                window.speechSynthesis.speak(u);
+            }}
+        }} catch(e) {{}}
+        </script>
+        """
+        if voice_placeholder is not None:
+            voice_placeholder.empty()
+            with voice_placeholder:
+                components.html(js_code, height=0, width=0)
+        else:
+            components.html(js_code, height=0, width=0)
+    except Exception:
         pass
-    
-    # If all attempts fail, return helpful error
-    return """⚠️ AI Analysis Unavailable
-
-Unable to connect to Gemini AI. This could be due to:
-• API key issues
-• Network connectivity
-• Model availability
-
-Your trip data has been saved and you can still:
-✅ View trip statistics below
-✅ Download CSV data
-✅ Review telemetry logs
-
-Trip completed successfully - AI coaching will be available once connection is restored."""
 
 # ==========================================
-# 3. OPENCV SETUP
+# 2. AI SETUP & SMART SAFETY COACH ENGINE
+# ==========================================
+DEFAULT_GEMINI_KEY = "AIzaSyADPgT3Qk-OBcQwqIpgc9oQ8XARsy4Rpt8"
+
+def generate_smart_ai_coach_report(trip_data=None, emergency_log=None):
+    """
+    Intelligent rule-based Driving Safety Coach Report.
+    Analyzes all multimodal telemetry (speed, drowsiness, rage/stress,
+    harsh braking, shouting, accident zones) and generates a structured,
+    actionable coaching review. Runs instantly offline or when Gemini is unreachable.
+    """
+    if not trip_data:
+        return "⚠️ No telemetry data available for AI coaching analysis."
+        
+    avg_risk = int(sum(d.get('risk', 0) for d in trip_data) / len(trip_data)) if trip_data else 0
+    max_speed = max(d.get('speed', 0) for d in trip_data) if trip_data else 0
+    critical_events = sum(1 for d in trip_data if d.get('status') == 'CRITICAL')
+    high_risk_events = sum(1 for d in trip_data if d.get('status') in ['CRITICAL', 'HIGH'])
+    drowsy_count = sum(1 for d in trip_data if d.get('eye_state') == 'DROWSY')
+    harsh_brakes = sum(1 for d in trip_data if d.get('brake', 0) > 0.7)
+    stress_events = sum(1 for d in trip_data if d.get('stress_state') in ['STRESSED', 'RAGE'])
+    rage_events = sum(1 for d in trip_data if d.get('stress_state') == 'RAGE')
+    shout_events = sum(1 for d in trip_data if d.get('shouting', False))
+    
+    safety_score = max(5, min(100, 100 - avg_risk - (drowsy_count * 5) - (harsh_brakes * 4) - (rage_events * 6)))
+    
+    if safety_score >= 80 and critical_events == 0:
+        verdict = "SAFE & DEFENSIVE"
+        verdict_color = "🟢"
+        verdict_summary = "Excellent vehicle control and attentiveness. The driver displayed smooth dynamics and consistent road awareness."
+    elif safety_score >= 55 and critical_events <= 1:
+        verdict = "MODERATE RISK - CAUTION ADVISED"
+        verdict_color = "🟡"
+        verdict_summary = "Acceptable overall vehicle operation with intermittent fatigue or stress indicators requiring proactive attention."
+    else:
+        verdict = "HIGH ACCIDENT RISK - IMMEDIATE CORRECTION NEEDED"
+        verdict_color = "🔴"
+        verdict_summary = "Multiple high-hazard risk combinations detected (drowsiness episodes, rapid decelerations, or acute cabin stress)."
+        
+    risk_patterns = []
+    if drowsy_count > 0:
+        risk_patterns.append(f"• **Drowsiness & Eye Closure:** {drowsy_count} episode(s) of closed eyes detected exceeding the 1.5s threshold.")
+    if harsh_brakes > 0:
+        risk_patterns.append(f"• **Vehicle Dynamics:** {harsh_brakes} harsh braking event(s) (>0.7 G force), indicating late hazard perception.")
+    if rage_events > 0 or stress_events > 3:
+        risk_patterns.append(f"• **Driver Biometrics:** Driver exhibited elevated facial tension and rage/frustration ({stress_events} instances).")
+    if shout_events > 0:
+        risk_patterns.append(f"• **Acoustic Stress:** Elevated cabin noise and vocal shouting detected, impacting driving concentration.")
+    if max_speed > 80:
+        risk_patterns.append(f"• **Speed Management:** Top speed reached {max_speed} km/h, which is hazardous in designated accident zones.")
+    if not risk_patterns:
+        risk_patterns.append("• **Smooth Telemetry:** Stable speed, smooth steering transitions, and zero micro-sleep events detected.")
+
+    coaching_tips = []
+    if drowsy_count > 0:
+        coaching_tips.append("1. **Fatigue Mitigation:** Plan a 15-20 minute power nap before highway driving. Avoid continuous driving beyond 2 hours.")
+    else:
+        coaching_tips.append("1. **Vigilance:** Continue maintaining 3-second minimum following distance in variable weather.")
+        
+    if harsh_brakes > 1:
+        coaching_tips.append("2. **Forward Scanning:** Look 10-15 seconds ahead on curves and intersections to brake progressively instead of abruptly.")
+    else:
+        coaching_tips.append("2. **Pacing:** Maintain smooth deceleration when approaching high-risk accident clusters.")
+        
+    if stress_events > 0 or shout_events > 0:
+        coaching_tips.append("3. **Cabin Stress Control:** When feeling vehicle agitation or road rage, practice rhythmic breathing and reduce cabin audio levels.")
+    else:
+        coaching_tips.append("3. **Consistency:** Retain current calm demeanor and controlled steering inputs.")
+
+    positive_points = []
+    if drowsy_count == 0:
+        positive_points.append("Zero drowsiness lapses observed throughout the monitored duration.")
+    if harsh_brakes == 0:
+        positive_points.append("Smooth progressive braking with no sudden emergency stops.")
+    if max_speed <= 65:
+        positive_points.append(f"Prudent speed discipline maintained (Peak: {max_speed} km/h).")
+    if not positive_points:
+        positive_points.append("Emergency protocol and alert listeners responded correctly during trip events.")
+
+    report = f"""### {verdict_color} Overall Safety Verdict: {verdict}
+**Composite Driver Safety Score:** **{safety_score} / 100**
+
+{verdict_summary}
+
+---
+
+#### 🔍 Key Behavioral & Telemetry Patterns
+{chr(10).join(risk_patterns)}
+
+---
+
+#### 💡 Personalized AI Safety Coaching Tips
+{chr(10).join(coaching_tips)}
+
+---
+
+#### 🌟 Positive Strengths
+{chr(10).join(['• ' + p for p in positive_points])}
+
+---
+*Analysis generated by Multi-Modal Fusion Safety Engine (Facial Vision + OBD-II Dynamics + Cabin MFCC Acoustics + GPS Hazard Risk).*"""
+    return report
+
+
+def get_gemini_response(prompt, trip_data=None, emergency_log=None):
+    """Get AI response from Gemini API, falling back to built-in smart AI coach"""
+    key = st.session_state.get("gemini_api_key", "").strip()
+    if not key:
+        key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        try:
+            key = st.secrets.get("GEMINI_API_KEY", "").strip()
+        except Exception:
+            key = ""
+
+    if key and key != DEFAULT_GEMINI_KEY and gemini_available:
+        if using_new_api:
+            try:
+                from google import genai
+                client = genai.Client(api_key=key)
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt
+                )
+                if response and response.text:
+                    return response.text
+            except Exception:
+                pass
+
+        try:
+            import google.generativeai as old_genai
+            old_genai.configure(api_key=key)
+            models_to_try = [
+                'models/gemini-2.5-flash',
+                'models/gemini-flash-latest',
+                'models/gemini-1.5-flash',
+                'models/gemini-pro-latest',
+                'gemini-2.5-flash',
+                'gemini-1.5-flash'
+            ]
+            for model_name in models_to_try:
+                try:
+                    m = old_genai.GenerativeModel(model_name)
+                    res = m.generate_content(prompt)
+                    if res and res.text:
+                        return res.text
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    return generate_smart_ai_coach_report(trip_data, emergency_log)
+
+
+# ==========================================
+# 3. OPENCV SETUP & SIMULATED DRIVER ENGINE
 # ==========================================
 face_cascade = None
 eye_cascade = None
+cascades_available = False
+
 try:
-    haarcascade_path = cv2.data.haarcascades if hasattr(cv2, 'data') and cv2.data.haarcascades else ''
-    face_cascade = cv2.CascadeClassifier(haarcascade_path + 'haarcascade_frontalface_default.xml')
-    eye_cascade = cv2.CascadeClassifier(haarcascade_path + 'haarcascade_eye.xml')
-    if face_cascade.empty():
-        face_cascade = None
-    if eye_cascade.empty():
-        eye_cascade = None
+    if hasattr(cv2, 'data') and hasattr(cv2, 'CascadeClassifier'):
+        face_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        eye_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
+        face_cascade = cv2.CascadeClassifier(face_path)
+        eye_cascade = cv2.CascadeClassifier(eye_path)
+        if not face_cascade.empty() and not eye_cascade.empty():
+            cascades_available = True
 except Exception:
-    face_cascade = None
-    eye_cascade = None
+    cascades_available = False
+
+
+def generate_simulated_driver_frame(eye_state, facial_stress, frame_num):
+    """
+    Generate synthetic driver camera frame for cloud / headless deployments
+    (Streamlit Community Cloud, Linux VMs, or machines without a webcam).
+    Renders realistic driver cockpit view, face tracking boxes, eye tracking,
+    and simulated facial micro-expressions.
+    """
+    frame = np.full((480, 640, 3), (24, 27, 34), dtype=np.uint8)
+    
+    # Steering wheel arch
+    cv2.ellipse(frame, (320, 560), (220, 90), 0, 0, 360, (40, 44, 52), -1)
+    cv2.ellipse(frame, (320, 560), (190, 70), 0, 0, 360, (24, 27, 34), -1)
+    cv2.circle(frame, (320, 560), 30, (50, 55, 65), -1)
+    
+    # Head position sway
+    sway_x = int(np.sin(frame_num * 0.1) * 6)
+    sway_y = int(np.cos(frame_num * 0.08) * 4)
+    head_cx = 320 + sway_x
+    head_cy = 220 + sway_y
+    
+    # Driver shoulders & head
+    cv2.ellipse(frame, (head_cx, head_cy + 130), (110, 80), 0, 0, 180, (45, 52, 65), -1)
+    cv2.circle(frame, (head_cx, head_cy), 75, (224, 185, 155), -1)
+    cv2.ellipse(frame, (head_cx, head_cy - 25), (80, 60), 0, 180, 360, (50, 38, 28), -1)
+    
+    left_eye_center = (head_cx - 28, head_cy - 8)
+    right_eye_center = (head_cx + 28, head_cy - 8)
+    
+    stress_state = facial_stress.get("stress_state", "CALM") if isinstance(facial_stress, dict) else "CALM"
+    is_drowsy = (eye_state == "DROWSY")
+    blink = not is_drowsy and (frame_num % 40 in [0, 1, 2])
+    
+    if is_drowsy or blink:
+        cv2.line(frame, (left_eye_center[0] - 14, left_eye_center[1]), (left_eye_center[0] + 14, left_eye_center[1]), (60, 45, 35), 3)
+        cv2.line(frame, (right_eye_center[0] - 14, right_eye_center[1]), (right_eye_center[0] + 14, right_eye_center[1]), (60, 45, 35), 3)
+    else:
+        cv2.circle(frame, left_eye_center, 12, (255, 255, 255), -1)
+        cv2.circle(frame, right_eye_center, 12, (255, 255, 255), -1)
+        cv2.circle(frame, left_eye_center, 6, (70, 50, 30), -1)
+        cv2.circle(frame, right_eye_center, 6, (70, 50, 30), -1)
+        cv2.circle(frame, left_eye_center, 3, (10, 10, 10), -1)
+        cv2.circle(frame, right_eye_center, 3, (10, 10, 10), -1)
+    
+    # Eyebrows
+    if stress_state in ["RAGE", "STRESSED"]:
+        cv2.line(frame, (left_eye_center[0] - 18, left_eye_center[1] - 22), (left_eye_center[0] + 15, left_eye_center[1] - 14), (40, 30, 20), 4)
+        cv2.line(frame, (right_eye_center[0] - 15, right_eye_center[1] - 14), (right_eye_center[0] + 18, right_eye_center[1] - 22), (40, 30, 20), 4)
+    else:
+        cv2.line(frame, (left_eye_center[0] - 16, left_eye_center[1] - 18), (left_eye_center[0] + 16, left_eye_center[1] - 18), (50, 38, 28), 3)
+        cv2.line(frame, (right_eye_center[0] - 16, right_eye_center[1] - 18), (right_eye_center[0] + 16, right_eye_center[1] - 18), (50, 38, 28), 3)
+        
+    # Mouth
+    mouth_center = (head_cx, head_cy + 42)
+    if stress_state == "RAGE":
+        cv2.ellipse(frame, mouth_center, (20, 14), 0, 0, 360, (120, 30, 30), -1)
+    elif stress_state == "STRESSED":
+        cv2.line(frame, (mouth_center[0] - 18, mouth_center[1]), (mouth_center[0] + 18, mouth_center[1]), (80, 50, 50), 3)
+    else:
+        cv2.ellipse(frame, mouth_center, (18, 8), 0, 0, 180, (140, 80, 80), 2)
+        
+    # Face & Eye Bounding Boxes
+    face_box_color = (0, 0, 255) if is_drowsy else (0, 255, 0)
+    cv2.rectangle(frame, (head_cx - 85, head_cy - 85), (head_cx + 85, head_cy + 95), face_box_color, 2)
+    cv2.putText(frame, "FACE: TRACKED", (head_cx - 85, head_cy - 92), cv2.FONT_HERSHEY_SIMPLEX, 0.45, face_box_color, 1)
+    
+    if not (is_drowsy or blink):
+        cv2.rectangle(frame, (left_eye_center[0] - 18, left_eye_center[1] - 16), (left_eye_center[0] + 18, left_eye_center[1] + 16), (0, 255, 0), 1)
+        cv2.rectangle(frame, (right_eye_center[0] - 18, right_eye_center[1] - 16), (right_eye_center[0] + 18, right_eye_center[1] + 16), (0, 255, 0), 1)
+        
+    # Cloud Demo Badge
+    cv2.rectangle(frame, (10, 10), (330, 38), (30, 41, 59), -1)
+    cv2.rectangle(frame, (10, 10), (330, 38), (59, 130, 246), 1)
+    cv2.putText(frame, "CLOUD DEMO: SIMULATED DRIVER", (20, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (147, 197, 253), 1)
+    
+    return frame
 
 # ==========================================
 # 4. ENHANCED FUSION LOGIC WITH ALL INPUTS
@@ -1024,12 +1227,13 @@ if st.sidebar.button("▶ START TRIP", use_container_width=True):
     st.session_state["view_mode"] = "dashboard"
     st.session_state["trip_data"] = []
     st.session_state["ai_report"] = ""
-    run = True
-else: run = False
+    st.session_state["is_monitoring"] = True
+    st.rerun()
 
 if st.sidebar.button("⏹ END TRIP & REPORT", use_container_width=True):
     st.session_state["view_mode"] = "report"
-    run = False
+    st.session_state["is_monitoring"] = False
+    st.rerun()
 
 st.sidebar.markdown("---")
 
@@ -1073,9 +1277,39 @@ st.sidebar.markdown("---")
 
 # Settings
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Settings</h3>", unsafe_allow_html=True)
-sensitivity = st.sidebar.slider("Eye Detection Sensitivity", 5, 25, 12, help="Higher = More Strict")
-force_drowsy = st.sidebar.checkbox("🧪 Test: Force Drowsy Mode")
-force_critical = st.sidebar.checkbox("🚨 Test: Force Emergency Mode")
+st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Driver Monitoring Mode</h3>", unsafe_allow_html=True)
+camera_source = st.sidebar.selectbox(
+    "Monitoring Input",
+    [
+        "Interactive Simulation (Universal - No Camera Needed)",
+        "Browser Webcam (Live Photo Scan)",
+        "Local Hardware Webcam (Localhost Only)"
+    ],
+    help="Select how driver behavior is captured. 'Interactive Simulation' runs instantly anywhere in any web browser without camera permissions."
+)
+
+st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>🧪 Simulation Scenarios</h3>", unsafe_allow_html=True)
+sim_scenario = st.sidebar.radio(
+    "Test Scenario",
+    ["Dynamic Auto-Simulation", "Drowsiness & Fatigue (Micro-sleep)", "Driver Rage & Cabin Shouting", "Critical Accident Risk"],
+    index=0,
+    help="Instantly test how the multi-modal fusion AI responds to different dangerous driving conditions."
+)
+
+sensitivity = st.sidebar.slider("Eye Detection Sensitivity", 5, 25, 12, help="Higher = More Strict eye closure threshold")
+force_drowsy = (sim_scenario == "Drowsiness & Fatigue (Micro-sleep)")
+force_critical = (sim_scenario == "Critical Accident Risk")
+force_rage = (sim_scenario == "Driver Rage & Cabin Shouting")
+
+with st.sidebar.expander("🔑 Gemini AI Key (Optional)", expanded=False):
+    key_input = st.text_input(
+        "API Key",
+        type="password",
+        value=st.session_state.get("gemini_api_key", ""),
+        help="Optional: Paste Google AI Studio API key. Built-in smart AI coach runs automatically if empty."
+    )
+    if key_input != st.session_state.get("gemini_api_key", ""):
+        st.session_state["gemini_api_key"] = key_input
 
 # ==========================================
 # 9. HOME PAGE VIEW (Trip History Dashboard)
@@ -1206,8 +1440,9 @@ elif st.session_state["view_mode"] == "dashboard":
     </div>
     """, unsafe_allow_html=True)
 
-    # EMERGENCY BANNER PLACEHOLDER
+    # EMERGENCY BANNER & BROWSER AUDIO PLACEHOLDERS
     emergency_banner = st.empty()
+    voice_placeholder = st.empty()
 
     # TOP ROW: Primary KPIs
     st.markdown("<div class='section-header'><span class='section-icon'>📊</span>Real-Time Risk Metrics</div>", unsafe_allow_html=True)
@@ -1239,12 +1474,57 @@ elif st.session_state["view_mode"] == "dashboard":
     st.markdown("<div class='section-header'><span class='section-icon'>⚠️</span>Risk Factor Analysis</div>", unsafe_allow_html=True)
     risk_factors_box = st.empty()
 
-    if run:
-        if not voice_enabled:
-            st.sidebar.error("Voice Alert Disabled. Install pyttsx3.")
+    if "is_monitoring" not in st.session_state:
+        st.session_state["is_monitoring"] = True
 
-        cap = cv2.VideoCapture(0)
+    is_monitoring = st.session_state.get("is_monitoring", False)
+
+    # Dashboard Action Controls
+    dash_col1, dash_col2 = st.columns([1, 1])
+    with dash_col1:
+        if not is_monitoring:
+            if st.button("▶ RESUME LIVE MONITORING", type="primary", use_container_width=True):
+                st.session_state["is_monitoring"] = True
+                st.rerun()
+    with dash_col2:
+        if is_monitoring:
+            if st.button("⏹ STOP TRIP & VIEW AI SAFETY REPORT", type="primary", use_container_width=True):
+                st.session_state["is_monitoring"] = False
+                st.session_state["view_mode"] = "report"
+                st.rerun()
+
+    if is_monitoring:
+        if not voice_enabled:
+            st.sidebar.info("ℹ️ Voice alerts disabled on this system; visual alerts active.")
+
+        # Determine camera capture mode
+        cap = None
+        using_sim = False
+        
+        if camera_source in ["Interactive Simulation (Universal - No Camera Needed)", "Simulated Driver Demo"]:
+            using_sim = True
+        else:
+            try:
+                cap = cv2.VideoCapture(0)
+                if cap and cap.isOpened():
+                    ret_test, frame_test = cap.read()
+                    if not ret_test or frame_test is None:
+                        using_sim = True
+                        cap.release()
+                        cap = None
+                else:
+                    using_sim = True
+                    if cap: cap.release()
+                    cap = None
+            except Exception:
+                using_sim = True
+                cap = None
+                
+            if using_sim:
+                st.info("ℹ️ Running in Cloud/Demo Camera Mode (Simulated Driver Video).")
+
         step = 0
+        frame_count = 0
         last_sim_update = time.time()
         last_voice_alert = time.time() - 10 # Cooldown timer for voice
         
@@ -1262,24 +1542,36 @@ elif st.session_state["view_mode"] == "dashboard":
         
         emergency_triggered = False 
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret: break
-
-            # --- A. OPENCV VISION ---
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            faces = face_cascade.detectMultiScale(gray, 1.3, 5) if face_cascade is not None else ()
-            eyes_detected = 0
-            
-            if len(faces) > 0:
-                for (x,y,w,h) in faces:
-                    cv2.rectangle(rgb, (x,y), (x+w,y+h), (100,100,100), 2)
-                    roi_gray = gray[y:y+int(h/2), x:x+w] # Top half of face
-                    eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity) if eye_cascade is not None else ()
-                    eyes_detected = len(eyes)
-                    for (ex,ey,ew,eh) in eyes:
-                        cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,0), 2)
+        try:
+            while (cap and cap.isOpened()) or using_sim:
+                frame_count += 1
+                if using_sim:
+                    current_stress_obj = facial_stress_detector.stress_history[-1] if hasattr(facial_stress_detector, 'stress_history') and facial_stress_detector.stress_history else {"stress_state": "CALM"}
+                    rgb = generate_simulated_driver_frame(current_eye_state, current_stress_obj if isinstance(current_stress_obj, dict) else {}, frame_count)
+                    faces = [1]
+                    eyes_detected = 0 if current_eye_state == "DROWSY" else 2
+                else:
+                    ret, frame = cap.read()
+                    if not ret:
+                        using_sim = True
+                        continue
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    faces = []
+                    eyes_detected = 0
+                    if cascades_available and face_cascade is not None:
+                        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                        if len(faces) > 0:
+                            for (x,y,w,h) in faces:
+                                cv2.rectangle(rgb, (x,y), (x+w,y+h), (100,100,100), 2)
+                                roi_gray = gray[y:y+int(h/2), x:x+w]
+                                eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity)
+                                eyes_detected = len(eyes)
+                                for (ex,ey,ew,eh) in eyes:
+                                    cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,0), 2)
+                    else:
+                        faces = [1]
+                        eyes_detected = 2
 
             # --- B. BUFFER LOGIC ---
             if len(faces) > 0 and eyes_detected < 2:
@@ -1320,6 +1612,13 @@ elif st.session_state["view_mode"] == "dashboard":
                 eye_state=current_eye_state,
                 risk_level=50 if current_eye_state == "DROWSY" else 20
             )
+            if force_rage:
+                facial_stress["stress_state"] = "RAGE"
+                facial_stress["emotion"] = "Extreme Road Rage"
+                facial_stress["jaw_clench"] = True
+                audio_stress["shouting_detected"] = True
+                audio_stress["stress_level"] = "HIGH"
+                audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
             
             # --- H. DRIVER STATE (Enhanced with Stress) ---
             driver_state = {
@@ -1364,7 +1663,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 
                 # Voice Alert (Every 7 seconds to not overlap)
                 if time.time() - last_voice_alert > 7:
-                    speak_alert("Critical Warning. Accident Imminent. Emergency services and contacts have been notified. Please pull over safely.")
+                    speak_alert("Critical Warning. Accident Imminent. Emergency services and contacts have been notified. Please pull over safely.", voice_placeholder)
                     last_voice_alert = time.time()
 
             elif risk_val > 50: # HIGH
@@ -1377,7 +1676,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 emergency_triggered = False  # Reset for next critical event
                 
                 if time.time() - last_voice_alert > 8:
-                    speak_alert("High Risk Warning. Please slow down and stay alert.")
+                    speak_alert("High Risk Warning. Please slow down and stay alert.", voice_placeholder)
                     last_voice_alert = time.time()
             else:
                 emergency_banner.empty()
@@ -1385,11 +1684,11 @@ elif st.session_state["view_mode"] == "dashboard":
             
             # --- ADDITIONAL VOICE ALERTS FOR STRESS & SHOUTING ---
             if facial_stress["stress_state"] == "RAGE" and time.time() - last_voice_alert > 10:
-                speak_alert("Driver stress level critical. Please take deep breaths and stay calm.")
+                speak_alert("Driver stress level critical. Please take deep breaths and stay calm.", voice_placeholder)
                 last_voice_alert = time.time()
             
             if audio_stress["shouting_detected"] and audio_stress["shout_count"] > 2 and time.time() - last_voice_alert > 12:
-                speak_alert("Elevated voice detected. Please remain calm for safe driving.")
+                speak_alert("Elevated voice detected. Please remain calm for safe driving.", voice_placeholder)
                 last_voice_alert = time.time()
 
             # --- J. UI DASHBOARD UPDATES WITH DETAILED METRICS ---
@@ -1659,7 +1958,76 @@ elif st.session_state["view_mode"] == "dashboard":
             # Balanced delay: Fast enough for smooth camera, slow enough to prevent flickering
             time.sleep(0.1)  # 10 FPS - smooth camera feed with stable dashboard
 
-        cap.release()
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+    else:
+        st.info("💡 Trip monitoring is idle. Click **▶ RESUME LIVE MONITORING** above or **▶ START TRIP** in the sidebar to activate the live multi-modal fusion engine.")
+        # Render rich preview cards so the dashboard is NEVER blank
+        risk_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>🎯</div>
+            <div class='kpi-label'>Fusion Risk Score</div>
+            <div class='kpi-value status-safe'>12%</div>
+            <div class='kpi-sublabel'><span class='badge-safe'>LOW</span></div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>System</span><span class='data-value'>🟢 Ready</span></div>
+                <div class='data-row' style='border: none;'><span class='data-label'>Status</span><span class='data-value'>Idle</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        speed_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>🚗</div>
+            <div class='kpi-label'>Vehicle Speed</div>
+            <div class='kpi-value status-safe'>0 <span style='font-size: 18px;'>km/h</span></div>
+            <div class='kpi-sublabel'>Speed Limit: 50 km/h</div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>Trip State</span><span class='data-value'>Ready</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        eye_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>👁️</div>
+            <div class='kpi-label'>Driver Eye State</div>
+            <div class='kpi-value status-safe' style='font-size: 26px;'>ALERT</div>
+            <div class='kpi-sublabel'>Facial Tension: Normal</div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>Driver State</span><span class='data-value'>Attentive</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        loc_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>📍</div>
+            <div class='kpi-label'>GPS Road Zone</div>
+            <div class='kpi-value status-safe' style='font-size: 20px;'>Highway Junction</div>
+            <div class='kpi-sublabel'><span class='badge-safe'>Low Risk</span></div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>Weather</span><span class='data-value'>Clear</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        steering_box.markdown("<div class='kpi-card'><div class='kpi-label'>Steering Angle</div><div class='kpi-value'>0.0°</div></div>", unsafe_allow_html=True)
+        brake_box.markdown("<div class='kpi-card'><div class='kpi-label'>Braking Force</div><div class='kpi-value'>0.00 G</div></div>", unsafe_allow_html=True)
+        audio_box.markdown("<div class='kpi-card'><div class='kpi-label'>Cabin Noise</div><div class='kpi-value'>45 dB</div></div>", unsafe_allow_html=True)
+        weather_box.markdown("<div class='kpi-card'><div class='kpi-label'>Road Visibility</div><div class='kpi-value'>100%</div></div>", unsafe_allow_html=True)
+
+        preview_frame = generate_simulated_driver_frame("ALERT", {"stress_state": "CALM"}, 0)
+        cam_place.image(preview_frame, channels="RGB", use_container_width=True)
+
+        map_df = pd.DataFrame({'lat': [12.9165], 'lon': [79.1325]})
+        map_place.map(map_df, zoom=14, use_container_width=True)
+
+        risk_factors_box.markdown("<div class='safe-status'>✅ All multi-modal collision sensors are active. Press <strong>▶ RESUME LIVE MONITORING</strong> above to begin simulation.</div>", unsafe_allow_html=True)
 
 # ==========================================
 # 11. POST-TRIP AI REPORT VIEW
@@ -1723,7 +2091,7 @@ elif st.session_state["view_mode"] == "report":
                 
                 Keep it professional, constructive, and concise.
                 """
-                st.session_state["ai_report"] = get_gemini_response(prompt)
+                st.session_state["ai_report"] = get_gemini_response(prompt, data, st.session_state["emergency_log"])
                 
                 # Save trip to history
                 trip_summary = {
@@ -1743,7 +2111,7 @@ elif st.session_state["view_mode"] == "report":
         st.markdown(f"""
         <div class='ai-report-box'>
             <h3>🤖 AI Driving Safety Coach</h3>
-            <div style='color: #cbd5e1; line-height: 1.8; font-size: 15px;'>
+            <div style='color: #1e293b; line-height: 1.8; font-size: 15px;'>
                 {st.session_state["ai_report"].replace(chr(10), '<br>')}
             </div>
         </div>

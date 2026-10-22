@@ -5,6 +5,11 @@ Test Gemini API connection and find available models
 """
 
 import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 API_KEY = "AIzaSyADPgT3Qk-OBcQwqIpgc9oQ8XARsy4Rpt8"
 

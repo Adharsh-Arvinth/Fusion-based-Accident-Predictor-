@@ -22,3 +22,6 @@ Thumbs.db
 
 # Data files that may contain sensitive info
 *.csv
+
+# Untracked project documents
+DATAENG PROJ/
