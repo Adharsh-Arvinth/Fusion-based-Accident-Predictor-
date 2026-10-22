@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import cv2
 import pandas as pd
 import numpy as np
@@ -46,18 +47,42 @@ except (ImportError, OSError, Exception):
 # ==========================================
 # 1. VOICE ALERT ENGINE (Runs in Background)
 # ==========================================
-def speak_alert(text):
-    if not voice_enabled: return
-    def run_speech():
-        try:
-            # Re-initialize in thread to prevent crashes
-            engine = pyttsx3.init()
-            engine.setProperty('rate', 160) # Speed of speech
-            engine.say(text)
-            engine.runAndWait()
-        except Exception:
-            pass
-    threading.Thread(target=run_speech, daemon=True).start()
+def speak_alert(text, voice_placeholder=None):
+    # 1. Local desktop TTS (when running locally with pyttsx3)
+    if voice_enabled:
+        def run_speech():
+            try:
+                engine = pyttsx3.init()
+                engine.setProperty('rate', 160)
+                engine.say(text)
+                engine.runAndWait()
+            except Exception:
+                pass
+        threading.Thread(target=run_speech, daemon=True).start()
+
+    # 2. Universal Browser Web Speech API (runs directly on visitor's laptop/phone speakers)
+    try:
+        clean_msg = text.replace("'", "\'").replace('"', '\"').replace('\n', ' ')
+        js_code = f"""
+        <script>
+        try {{
+            if ('speechSynthesis' in window) {{
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance('{clean_msg}');
+                u.rate = 1.0;
+                window.speechSynthesis.speak(u);
+            }}
+        }} catch(e) {{}}
+        </script>
+        """
+        if voice_placeholder is not None:
+            voice_placeholder.empty()
+            with voice_placeholder:
+                components.html(js_code, height=0, width=0)
+        else:
+            components.html(js_code, height=0, width=0)
+    except Exception:
+        pass
 
 # ==========================================
 # 2. AI SETUP & SMART SAFETY COACH ENGINE
@@ -1251,14 +1276,30 @@ st.sidebar.markdown("---")
 
 # Settings
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Settings</h3>", unsafe_allow_html=True)
-sensitivity = st.sidebar.slider("Eye Detection Sensitivity", 5, 25, 12, help="Higher = More Strict")
-force_drowsy = st.sidebar.checkbox("🧪 Test: Force Drowsy Mode")
-force_critical = st.sidebar.checkbox("🚨 Test: Force Emergency Mode")
+st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Driver Monitoring Mode</h3>", unsafe_allow_html=True)
 camera_source = st.sidebar.selectbox(
-    "📹 Camera Source",
-    ["Auto (Webcam with Cloud Fallback)", "Live Webcam", "Simulated Driver Demo"],
-    help="Auto uses your webcam if available, or seamlessly simulates driver video on Streamlit Cloud."
+    "Monitoring Input",
+    [
+        "Interactive Simulation (Universal - No Camera Needed)",
+        "Browser Webcam (Live Photo Scan)",
+        "Local Hardware Webcam (Localhost Only)"
+    ],
+    help="Select how driver behavior is captured. 'Interactive Simulation' runs instantly anywhere in any web browser without camera permissions."
 )
+
+st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>🧪 Simulation Scenarios</h3>", unsafe_allow_html=True)
+sim_scenario = st.sidebar.radio(
+    "Test Scenario",
+    ["Dynamic Auto-Simulation", "Drowsiness & Fatigue (Micro-sleep)", "Driver Rage & Cabin Shouting", "Critical Accident Risk"],
+    index=0,
+    help="Instantly test how the multi-modal fusion AI responds to different dangerous driving conditions."
+)
+
+sensitivity = st.sidebar.slider("Eye Detection Sensitivity", 5, 25, 12, help="Higher = More Strict eye closure threshold")
+force_drowsy = (sim_scenario == "Drowsiness & Fatigue (Micro-sleep)")
+force_critical = (sim_scenario == "Critical Accident Risk")
+force_rage = (sim_scenario == "Driver Rage & Cabin Shouting")
+
 with st.sidebar.expander("🔑 Gemini AI Key (Optional)", expanded=False):
     key_input = st.text_input(
         "API Key",
@@ -1398,8 +1439,9 @@ elif st.session_state["view_mode"] == "dashboard":
     </div>
     """, unsafe_allow_html=True)
 
-    # EMERGENCY BANNER PLACEHOLDER
+    # EMERGENCY BANNER & BROWSER AUDIO PLACEHOLDERS
     emergency_banner = st.empty()
+    voice_placeholder = st.empty()
 
     # TOP ROW: Primary KPIs
     st.markdown("<div class='section-header'><span class='section-icon'>📊</span>Real-Time Risk Metrics</div>", unsafe_allow_html=True)
@@ -1456,7 +1498,7 @@ elif st.session_state["view_mode"] == "dashboard":
         cap = None
         using_sim = False
         
-        if camera_source == "Simulated Driver Demo":
+        if camera_source in ["Interactive Simulation (Universal - No Camera Needed)", "Simulated Driver Demo"]:
             using_sim = True
         else:
             try:
@@ -1567,6 +1609,13 @@ elif st.session_state["view_mode"] == "dashboard":
                 eye_state=current_eye_state,
                 risk_level=50 if current_eye_state == "DROWSY" else 20
             )
+            if force_rage:
+                facial_stress["stress_state"] = "RAGE"
+                facial_stress["emotion"] = "Extreme Road Rage"
+                facial_stress["jaw_clench"] = True
+                audio_stress["shouting_detected"] = True
+                audio_stress["stress_level"] = "HIGH"
+                audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
             
             # --- H. DRIVER STATE (Enhanced with Stress) ---
             driver_state = {
@@ -1611,7 +1660,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 
                 # Voice Alert (Every 7 seconds to not overlap)
                 if time.time() - last_voice_alert > 7:
-                    speak_alert("Critical Warning. Accident Imminent. Emergency services and contacts have been notified. Please pull over safely.")
+                    speak_alert("Critical Warning. Accident Imminent. Emergency services and contacts have been notified. Please pull over safely.", voice_placeholder)
                     last_voice_alert = time.time()
 
             elif risk_val > 50: # HIGH
@@ -1624,7 +1673,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 emergency_triggered = False  # Reset for next critical event
                 
                 if time.time() - last_voice_alert > 8:
-                    speak_alert("High Risk Warning. Please slow down and stay alert.")
+                    speak_alert("High Risk Warning. Please slow down and stay alert.", voice_placeholder)
                     last_voice_alert = time.time()
             else:
                 emergency_banner.empty()
@@ -1632,11 +1681,11 @@ elif st.session_state["view_mode"] == "dashboard":
             
             # --- ADDITIONAL VOICE ALERTS FOR STRESS & SHOUTING ---
             if facial_stress["stress_state"] == "RAGE" and time.time() - last_voice_alert > 10:
-                speak_alert("Driver stress level critical. Please take deep breaths and stay calm.")
+                speak_alert("Driver stress level critical. Please take deep breaths and stay calm.", voice_placeholder)
                 last_voice_alert = time.time()
             
             if audio_stress["shouting_detected"] and audio_stress["shout_count"] > 2 and time.time() - last_voice_alert > 12:
-                speak_alert("Elevated voice detected. Please remain calm for safe driving.")
+                speak_alert("Elevated voice detected. Please remain calm for safe driving.", voice_placeholder)
                 last_voice_alert = time.time()
 
             # --- J. UI DASHBOARD UPDATES WITH DETAILED METRICS ---
