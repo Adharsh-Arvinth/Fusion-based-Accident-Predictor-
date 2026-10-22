@@ -1337,7 +1337,15 @@ sim_scenario = st.sidebar.radio(
     help="Instantly test how the multi-modal fusion AI responds to different dangerous driving conditions."
 )
 
-sensitivity = st.sidebar.slider("Eye Detection Sensitivity", 5, 25, 12, help="Higher = More Strict eye closure threshold")
+st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>👁️ Eye Tracking Strictness</h3>", unsafe_allow_html=True)
+sensitivity = st.sidebar.slider(
+    "Eye Strictness (Higher = Stricter)",
+    min_value=2,
+    max_value=15,
+    value=4,
+    help="Higher = stricter eye closure detection. Increase if glasses reflections or eyelids cause false 'ALERT' when sleepy. Decrease if wide open eyes are not detected."
+)
+st.sidebar.caption("💡 Tip: Increase slider if wearing glasses and app shows 'ALERT' while eyes are closed.")
 force_drowsy = (sim_scenario == "Drowsiness & Fatigue (Micro-sleep)")
 force_critical = (sim_scenario == "Critical Accident Risk")
 force_rage = (sim_scenario == "Driver Rage & Cabin Shouting")
@@ -1638,49 +1646,62 @@ elif st.session_state["view_mode"] == "dashboard":
                         gray = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2GRAY)
                         rgb = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2RGB)
                         
-                        # Detect face
+                        # 1. Detect face (alt2 first, default fallback)
                         faces = []
                         if face_alt2_cascade is not None and not face_alt2_cascade.empty():
-                            faces = face_alt2_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 40))
+                            faces = face_alt2_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(35, 35))
                         if len(faces) == 0 and face_cascade is not None:
-                            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(40, 40))
+                            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(35, 35))
                         
-                        eyes = []
+                        both_open = False
+                        eyes_detected = 0
+                        
                         if len(faces) > 0:
-                            for (x, y, w, h) in faces[:1]:
-                                cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                                eye_roi = gray[y + int(h*0.12) : y + int(h*0.60), x : x+w]
-                                eyes = eye_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
-                                if len(eyes) == 0 and eye_glasses_cascade is not None:
-                                    eyes = eye_glasses_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
-                                for (ex, ey, ew, eh) in eyes:
-                                    cv2.rectangle(rgb[y + int(h*0.12) : y + int(h*0.60), x : x+w], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
-                        
-                        # Fallback to upper frame scan if eyes not found inside face box
-                        if len(eyes) == 0:
-                            upper_gray = gray[0 : int(user_bgr.shape[0] * 0.65), :]
-                            eyes = eye_cascade.detectMultiScale(upper_gray, scaleFactor=1.15, minNeighbors=2, minSize=(18, 18))
-                            for (ex, ey, ew, eh) in eyes:
-                                cv2.rectangle(rgb[0 : int(user_bgr.shape[0] * 0.65), :], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                            (x, y, w, h) = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
+                            cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                            
+                            # Smart eye band: upper 12% to 55% of face
+                            eye_roi_gray = gray[y + int(h*0.12) : y + int(h*0.55), x : x+w]
+                            eye_roi_rgb = rgb[y + int(h*0.12) : y + int(h*0.55), x : x+w]
+                            roi_w = eye_roi_gray.shape[1]
+                            
+                            calibrated_sens = max(2, int(sensitivity))
+                            eyes = eye_cascade.detectMultiScale(
+                                eye_roi_gray, scaleFactor=1.1, minNeighbors=calibrated_sens, minSize=(12, 12)
+                            )
+                            if len(eyes) == 0 and eye_glasses_cascade is not None:
+                                eyes = eye_glasses_cascade.detectMultiScale(
+                                    eye_roi_gray, scaleFactor=1.1, minNeighbors=calibrated_sens, minSize=(12, 12)
+                                )
                                 
-                        eyes_detected = len(eyes)
-                        # An alert driver must have BOTH eyes clearly open (eyes_detected >= 2).
-                        # If 0 or 1 eye is detected (sleepy/closed eyes, glasses glare, drooping eyelid),
-                        # the driver is DROWSY.
-                        if eyes_detected >= 2:
+                            midpoint = roi_w * 0.5
+                            left_eyes = [e for e in eyes if (e[0] + e[2]/2.0) < midpoint]
+                            right_eyes = [e for e in eyes if (e[0] + e[2]/2.0) >= midpoint]
+                            
+                            for (ex, ey, ew, eh) in eyes:
+                                cv2.rectangle(eye_roi_rgb, (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                                
+                            eyes_detected = len(eyes)
+                            # Strict ADAS bilateral rule: Driver is ALERT only if BOTH left and right eyes are open!
+                            both_open = (len(left_eyes) >= 1 and len(right_eyes) >= 1)
+                        
+                        if both_open:
                             current_eye_state = "ALERT"
-                            eye_label = f"EYES: {eyes_detected}/2 OPEN (ALERT)"
+                            eye_label = f"EYES: BOTH OPEN ({eyes_detected} DETECTED) - ALERT"
                             eye_color = (0, 255, 100)
+                            status_color = (0, 255, 0)
                         else:
                             current_eye_state = "DROWSY"
-                            if eyes_detected == 0:
-                                eye_label = "EYES: 0/2 CLOSED (DROWSY DETECTED!)"
+                            if len(faces) == 0:
+                                eye_label = "DRIVER NOT DETECTED (DROWSY / DISTRACTED)"
+                            elif eyes_detected == 0:
+                                eye_label = "EYES: BOTH CLOSED (DROWSY DETECTED!)"
                             else:
-                                eye_label = "EYES: 1/2 DROOPING / SLEEPY (DROWSY!)"
-                            eye_color = (0, 0, 255)
+                                eye_label = "EYES: 1 CLOSED / DROOPING (DROWSY DETECTED!)"
+                            eye_color = (255, 50, 50)
+                            status_color = (255, 50, 50)
                             
                         cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
-                        status_color = (0, 0, 255) if current_eye_state == "DROWSY" else (0, 255, 0)
                         cv2.putText(rgb, f"STATUS: {current_eye_state}", (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, status_color, 2)
                         cam_place.image(rgb, channels="RGB", use_container_width=True)
                     else:
@@ -1711,36 +1732,44 @@ elif st.session_state["view_mode"] == "dashboard":
                     if len(faces) == 0 and face_cascade is not None:
                         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(35, 35))
                     
-                    eyes = []
+                    both_open = False
+                    eyes_detected = 0
+                    
                     if len(faces) > 0:
-                        faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[:1]
-                        for (x, y, w, h) in faces:
-                            cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                            eye_roi = gray[y + int(h * 0.12) : y + int(h * 0.60), x : x + w]
-                            eyes = eye_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
-                            if len(eyes) == 0 and eye_glasses_cascade is not None:
-                                eyes = eye_glasses_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
-                            for (ex, ey, ew, eh) in eyes:
-                                cv2.rectangle(rgb[y + int(h * 0.12) : y + int(h * 0.60), x : x + w], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
-                    
-                    # 2. Upper-frame eye fallback (ensures eyes are found even if forehead/chin is cropped near camera edge)
-                    if len(eyes) == 0:
-                        upper_gray = gray[0 : int(frame.shape[0] * 0.65), :]
-                        eyes = eye_cascade.detectMultiScale(upper_gray, scaleFactor=1.15, minNeighbors=3, minSize=(18, 18))
+                        (x, y, w, h) = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
+                        cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                        
+                        eye_roi_gray = gray[y + int(h * 0.12) : y + int(h * 0.55), x : x + w]
+                        eye_roi_rgb = rgb[y + int(h * 0.12) : y + int(h * 0.55), x : x + w]
+                        roi_w = eye_roi_gray.shape[1]
+                        
+                        calibrated_sens = max(2, int(sensitivity))
+                        eyes = eye_cascade.detectMultiScale(
+                            eye_roi_gray, scaleFactor=1.1, minNeighbors=calibrated_sens, minSize=(12, 12)
+                        )
                         if len(eyes) == 0 and eye_glasses_cascade is not None:
-                            eyes = eye_glasses_cascade.detectMultiScale(upper_gray, scaleFactor=1.15, minNeighbors=2, minSize=(18, 18))
+                            eyes = eye_glasses_cascade.detectMultiScale(
+                                eye_roi_gray, scaleFactor=1.1, minNeighbors=calibrated_sens, minSize=(12, 12)
+                            )
+                            
+                        midpoint = roi_w * 0.5
+                        left_eyes = [e for e in eyes if (e[0] + e[2]/2.0) < midpoint]
+                        right_eyes = [e for e in eyes if (e[0] + e[2]/2.0) >= midpoint]
+                        
                         for (ex, ey, ew, eh) in eyes:
-                            cv2.rectangle(rgb[0 : int(frame.shape[0] * 0.65), :], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
-                    
-                    eyes_detected = len(eyes)
+                            cv2.rectangle(eye_roi_rgb, (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                            
+                        eyes_detected = len(eyes)
+                        # Strict ADAS bilateral rule: Driver is ALERT only if BOTH left and right eyes are open!
+                        both_open = (len(left_eyes) >= 1 and len(right_eyes) >= 1)
                     
                     # --- C. BUFFER LOGIC FOR DROWSINESS ---
-                    # To be ALERT, BOTH eyes must be open (eyes_detected >= 2).
-                    # If eyes < 2 for more than 400ms (blinks are < 300ms), declare DROWSY!
-                    if eyes_detected >= 2:
+                    # To be ALERT, BOTH eyes must be open (both_open == True).
+                    # If eyes < 2 or closed for > 400ms (blinks are < 300ms), declare DROWSY!
+                    if both_open:
                         drowsy_start_time = None
                         current_eye_state = "ALERT"
-                        eye_label = f"EYES: {eyes_detected}/2 OPEN (ALERT)"
+                        eye_label = f"EYES: BOTH OPEN ({eyes_detected} DETECTED) - ALERT"
                         eye_color = (0, 255, 100)
                     else:
                         if drowsy_start_time is None:
@@ -1749,19 +1778,21 @@ elif st.session_state["view_mode"] == "dashboard":
                         
                         if closed_duration >= 0.4:  # 400ms threshold
                             current_eye_state = "DROWSY"
-                            if eyes_detected == 0:
+                            if len(faces) == 0:
+                                eye_label = f"NO FACE / DISTRACTED ({closed_duration:.1f}s) - DROWSY!"
+                            elif eyes_detected == 0:
                                 eye_label = f"EYES: CLOSED ({closed_duration:.1f}s) - DROWSY!"
                             else:
-                                eye_label = f"EYES: DROOPING ({closed_duration:.1f}s) - DROWSY!"
-                            eye_color = (0, 0, 255)
+                                eye_label = f"EYES: 1 CLOSED / SLEEPY ({closed_duration:.1f}s) - DROWSY!"
+                            eye_color = (255, 50, 50)
                         else:
                             eye_label = f"EYES: BLINKING ({closed_duration:.1f}s)"
-                            eye_color = (0, 165, 255)
+                            eye_color = (255, 165, 0)
 
                 if force_drowsy:
                     current_eye_state = "DROWSY"
                     eye_label = "TEST MODE: FORCED DROWSY"
-                    eye_color = (0, 0, 255)
+                    eye_color = (255, 50, 50)
 
                 # --- H. DRIVER STATE (Enhanced with Stress) ---
                 driver_state = {
@@ -2079,7 +2110,9 @@ elif st.session_state["view_mode"] == "dashboard":
             
                 # Camera (skip rendering if browser_mode — already rendered above with real face)
                 if not browser_mode:
-                    cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
+                    status_col = (255, 50, 50) if current_eye_state == "DROWSY" else (0, 255, 0)
+                    cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
+                    cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.85, status_col, 2)
                     cam_place.image(rgb, channels="RGB", use_container_width=True)
                 eye_status_icon = "😴 DROWSY" if current_eye_state == "DROWSY" else f"👁 Eyes: {eyes_detected if not using_sim else '—'}"
                 eye_status_color = "#ef4444" if current_eye_state == "DROWSY" else "#10b981"
