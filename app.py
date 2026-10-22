@@ -1592,7 +1592,8 @@ elif st.session_state["view_mode"] == "dashboard":
         audio_sim = st.session_state["audio_sim"]
         facial_stress_detector = st.session_state["facial_stress_detector"]
         
-        emergency_triggered = False 
+        emergency_triggered = False
+        rgb = create_adas_hud_preview() 
 
         try:
             while (cap and cap.isOpened()) or using_sim or browser_mode:
@@ -2013,19 +2014,6 @@ elif st.session_state["view_mode"] == "dashboard":
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-            
-                # Camera Feed
-                cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
-                cv2.putText(rgb, f"RISK: {risk_val}% ({risk_label})", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0) if risk_val > 50 else (0,255,0), 2)
-                cam_place.image(rgb, channels="RGB", use_container_width=True)
-            
-                # GPS Map with Accident Zones
-                map_data = pd.DataFrame({
-                    'lat': [current_lat] + [z["lat"] for z in ACCIDENT_PRONE_ZONES],
-                    'lon': [current_lon] + [z["lon"] for z in ACCIDENT_PRONE_ZONES],
-                    'type': ['Current'] + [z["risk"] for z in ACCIDENT_PRONE_ZONES]
-                })
-                map_place.map(map_data, zoom=13, use_container_width=True)
             
                 # Risk Factors Display with detailed information
                 if risk_factors:
