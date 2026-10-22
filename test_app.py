@@ -5,6 +5,11 @@ Quick test script to verify app.py works correctly
 """
 
 import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 print("Testing Fusion-Based Accident Predictor...")
 print("=" * 50)
