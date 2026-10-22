@@ -1227,12 +1227,13 @@ if st.sidebar.button("▶ START TRIP", use_container_width=True):
     st.session_state["view_mode"] = "dashboard"
     st.session_state["trip_data"] = []
     st.session_state["ai_report"] = ""
-    run = True
-else: run = False
+    st.session_state["is_monitoring"] = True
+    st.rerun()
 
 if st.sidebar.button("⏹ END TRIP & REPORT", use_container_width=True):
     st.session_state["view_mode"] = "report"
-    run = False
+    st.session_state["is_monitoring"] = False
+    st.rerun()
 
 st.sidebar.markdown("---")
 
@@ -1473,24 +1474,26 @@ elif st.session_state["view_mode"] == "dashboard":
     st.markdown("<div class='section-header'><span class='section-icon'>⚠️</span>Risk Factor Analysis</div>", unsafe_allow_html=True)
     risk_factors_box = st.empty()
 
+    if "is_monitoring" not in st.session_state:
+        st.session_state["is_monitoring"] = True
+
+    is_monitoring = st.session_state.get("is_monitoring", False)
+
     # Dashboard Action Controls
     dash_col1, dash_col2 = st.columns([1, 1])
     with dash_col1:
-        if not run:
-            if st.button("▶ START LIVE MONITORING", type="primary", use_container_width=True):
-                st.session_state["view_mode"] = "dashboard"
-                st.session_state["trip_data"] = []
-                st.session_state["ai_report"] = ""
-                st.session_state["trip_running"] = True
+        if not is_monitoring:
+            if st.button("▶ RESUME LIVE MONITORING", type="primary", use_container_width=True):
+                st.session_state["is_monitoring"] = True
                 st.rerun()
     with dash_col2:
-        if run:
-            if st.button("⏹ STOP TRIP & VIEW SAFETY REPORT", type="primary", use_container_width=True):
+        if is_monitoring:
+            if st.button("⏹ STOP TRIP & VIEW AI SAFETY REPORT", type="primary", use_container_width=True):
+                st.session_state["is_monitoring"] = False
                 st.session_state["view_mode"] = "report"
-                st.session_state["trip_running"] = False
                 st.rerun()
 
-    if run:
+    if is_monitoring:
         if not voice_enabled:
             st.sidebar.info("ℹ️ Voice alerts disabled on this system; visual alerts active.")
 
@@ -1962,7 +1965,69 @@ elif st.session_state["view_mode"] == "dashboard":
                 except Exception:
                     pass
     else:
-        st.info("💡 Trip monitoring is idle. Click **▶ START TRIP** in the sidebar or above to begin live accident prediction.")
+        st.info("💡 Trip monitoring is idle. Click **▶ RESUME LIVE MONITORING** above or **▶ START TRIP** in the sidebar to activate the live multi-modal fusion engine.")
+        # Render rich preview cards so the dashboard is NEVER blank
+        risk_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>🎯</div>
+            <div class='kpi-label'>Fusion Risk Score</div>
+            <div class='kpi-value status-safe'>12%</div>
+            <div class='kpi-sublabel'><span class='badge-safe'>LOW</span></div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>System</span><span class='data-value'>🟢 Ready</span></div>
+                <div class='data-row' style='border: none;'><span class='data-label'>Status</span><span class='data-value'>Idle</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        speed_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>🚗</div>
+            <div class='kpi-label'>Vehicle Speed</div>
+            <div class='kpi-value status-safe'>0 <span style='font-size: 18px;'>km/h</span></div>
+            <div class='kpi-sublabel'>Speed Limit: 50 km/h</div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>Trip State</span><span class='data-value'>Ready</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        eye_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>👁️</div>
+            <div class='kpi-label'>Driver Eye State</div>
+            <div class='kpi-value status-safe' style='font-size: 26px;'>ALERT</div>
+            <div class='kpi-sublabel'>Facial Tension: Normal</div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>Driver State</span><span class='data-value'>Attentive</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        loc_box.markdown("""
+        <div class='kpi-card'>
+            <div class='kpi-icon'>📍</div>
+            <div class='kpi-label'>GPS Road Zone</div>
+            <div class='kpi-value status-safe' style='font-size: 20px;'>Highway Junction</div>
+            <div class='kpi-sublabel'><span class='badge-safe'>Low Risk</span></div>
+            <div class='data-grid' style='margin-top: 12px;'>
+                <div class='data-row'><span class='data-label'>Weather</span><span class='data-value'>Clear</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        steering_box.markdown("<div class='kpi-card'><div class='kpi-label'>Steering Angle</div><div class='kpi-value'>0.0°</div></div>", unsafe_allow_html=True)
+        brake_box.markdown("<div class='kpi-card'><div class='kpi-label'>Braking Force</div><div class='kpi-value'>0.00 G</div></div>", unsafe_allow_html=True)
+        audio_box.markdown("<div class='kpi-card'><div class='kpi-label'>Cabin Noise</div><div class='kpi-value'>45 dB</div></div>", unsafe_allow_html=True)
+        weather_box.markdown("<div class='kpi-card'><div class='kpi-label'>Road Visibility</div><div class='kpi-value'>100%</div></div>", unsafe_allow_html=True)
+
+        preview_frame = generate_simulated_driver_frame("ALERT", {"stress_state": "CALM"}, 0)
+        cam_place.image(preview_frame, channels="RGB", use_container_width=True)
+
+        map_df = pd.DataFrame({'lat': [12.9165], 'lon': [79.1325]})
+        map_place.map(map_df, zoom=14, use_container_width=True)
+
+        risk_factors_box.markdown("<div class='safe-status'>✅ All multi-modal collision sensors are active. Press <strong>▶ RESUME LIVE MONITORING</strong> above to begin simulation.</div>", unsafe_allow_html=True)
 
 # ==========================================
 # 11. POST-TRIP AI REPORT VIEW
