@@ -2006,15 +2006,17 @@ elif st.session_state["view_mode"] == "dashboard":
                 cam_place.image(rgb, channels="RGB", use_container_width=True)
                 cam_status_place.markdown(f"<div style='text-align: center; color: #10b981; font-weight: 600; font-size: 13px; margin-top: 4px;'>🟢 Live AI Vision Active • Telemetry Step {frame_count}</div>", unsafe_allow_html=True)
             
-                # GPS Map Update
-                map_data = pd.DataFrame({'lat': [current_lat], 'lon': [current_lon]})
-                map_place.map(map_data, zoom=14, use_container_width=True)
+                # GPS Map Update (Rendered every 8 frames to save cloud CPU and prevent throttling)
+                if frame_count % 8 == 1 or frame_count == 1:
+                    map_data = pd.DataFrame({'lat': [current_lat], 'lon': [current_lon]})
+                    map_place.map(map_data, zoom=14, use_container_width=True)
             
-                # Balanced delay: Fast enough for smooth camera, slow enough to prevent flickering
-                time.sleep(0.1)  # 10 FPS - smooth camera feed with stable dashboard
+                # CPU-Optimized Delay: 20 FPS for local webcam; 5 FPS for cloud simulation to stay within free-tier limits
+                loop_delay = 0.05 if (cap and cap.isOpened()) else 0.20
+                time.sleep(loop_delay)
 
-                # Auto-transition to AI Safety Report after 300 simulation steps (~30s), or stop anytime via button
-                if using_sim and frame_count >= 300:
+                # Auto-transition to AI Safety Report after 150 simulation steps (~30s), or stop anytime via button
+                if (using_sim or browser_mode) and frame_count >= 150:
                     st.session_state["is_monitoring"] = False
                     st.session_state["view_mode"] = "report"
                     st.rerun()
