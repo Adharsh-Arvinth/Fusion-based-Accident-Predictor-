@@ -1278,14 +1278,34 @@ st.sidebar.markdown("---")
 # Settings
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Settings</h3>", unsafe_allow_html=True)
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Driver Monitoring Mode</h3>", unsafe_allow_html=True)
+
+# Auto-detect whether a local physical camera is accessible on this machine
+if "local_cam_ok" not in st.session_state:
+    try:
+        _chk = cv2.VideoCapture(0)
+        st.session_state["local_cam_ok"] = bool(_chk and _chk.isOpened())
+        if _chk:
+            _chk.release()
+    except Exception:
+        st.session_state["local_cam_ok"] = False
+
+has_local_cam = st.session_state.get("local_cam_ok", False)
+
+camera_options = [
+    "Live Laptop Webcam (Real Face Detection)",
+    "Browser Camera (Real Face Scan)",
+    "Simulated Driver Demo (Virtual Driver)"
+] if has_local_cam else [
+    "Browser Camera (Real Face Scan)",
+    "Live Laptop Webcam (Localhost Only)",
+    "Simulated Driver Demo (Virtual Driver)"
+]
+
 camera_source = st.sidebar.selectbox(
     "Monitoring Input",
-    [
-        "Interactive Simulation (Universal - No Camera Needed)",
-        "Browser Webcam (Live Photo Scan)",
-        "Local Hardware Webcam (Localhost Only)"
-    ],
-    help="Select how driver behavior is captured. 'Interactive Simulation' runs instantly anywhere in any web browser without camera permissions."
+    camera_options,
+    index=0,
+    help="Select 'Live Laptop Webcam' to stream your real face in real time, or 'Browser Camera' to capture your real face via the browser."
 )
 
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>🧪 Simulation Scenarios</h3>", unsafe_allow_html=True)
@@ -1463,8 +1483,12 @@ elif st.session_state["view_mode"] == "dashboard":
     # MIDDLE ROW: Camera & GPS Map
     st.markdown("<div class='section-header'><span class='section-icon'>📹</span>Live Monitoring Systems</div>", unsafe_allow_html=True)
     cam_col, map_col = st.columns([1, 1])
+    browser_photo = None
     with cam_col:
         st.markdown("**Driver Vision Feed**")
+        if "Browser Camera" in camera_source:
+            st.caption("📸 Allow camera permission below to scan your real face into the AI system:")
+            browser_photo = st.camera_input("Scan your face", key="browser_cam_input", label_visibility="collapsed")
         cam_place = st.empty()
         cam_status_place = st.empty()
     with map_col:
@@ -1501,10 +1525,15 @@ elif st.session_state["view_mode"] == "dashboard":
         # Determine camera capture mode
         cap = None
         using_sim = False
+        browser_mode = ("Browser Camera" in camera_source)
         
-        if camera_source in ["Interactive Simulation (Universal - No Camera Needed)", "Simulated Driver Demo"]:
+        if "Simulated Driver" in camera_source:
             using_sim = True
+        elif browser_mode:
+            # Browser Camera Mode: uses st.camera_input snapshot of real face
+            using_sim = False
         else:
+            # Live Hardware Webcam Mode: try direct hardware capture (localhost)
             try:
                 cap = cv2.VideoCapture(0)
                 if cap and cap.isOpened():
@@ -1522,7 +1551,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 cap = None
                 
             if using_sim:
-                st.info("ℹ️ Running in Cloud/Demo Camera Mode (Simulated Driver Video).")
+                st.warning("⚠️ Live hardware webcam stream is active when running locally on your laptop (`RUN_APP.bat`). On Streamlit Cloud, switch to **'Browser Camera (Real Face Scan)'** in the sidebar to scan your real face directly in your browser.")
 
         step = 0
         frame_count = 0
@@ -1545,7 +1574,7 @@ elif st.session_state["view_mode"] == "dashboard":
         emergency_triggered = False 
 
         try:
-            while (cap and cap.isOpened()) or using_sim:
+            while (cap and cap.isOpened()) or using_sim or browser_mode:
                 frame_count += 1
                 
                 # --- A. UPDATE SIMULATION TELEMETRY ---
@@ -1580,11 +1609,39 @@ elif st.session_state["view_mode"] == "dashboard":
                     audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
 
                 # --- B. ACQUIRE / RENDER DRIVER VISION ---
-                if using_sim:
+                if browser_mode:
+                    if browser_photo is not None:
+                        # Process user's real face from browser camera snapshot
+                        photo_bytes = np.asarray(bytearray(browser_photo.getvalue()), dtype=np.uint8)
+                        user_bgr = cv2.imdecode(photo_bytes, cv2.IMREAD_COLOR)
+                        gray = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2GRAY)
+                        rgb = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2RGB)
+                        faces = []
+                        eyes_detected = 0
+                        if cascades_available and face_cascade is not None:
+                            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                            for (x,y,w,h) in faces:
+                                cv2.rectangle(rgb, (x,y), (x+w,y+h), (0,255,0), 3)
+                                roi_gray = gray[y:y+int(h/2), x:x+w]
+                                eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity)
+                                eyes_detected = max(eyes_detected, len(eyes))
+                                for (ex,ey,ew,eh) in eyes:
+                                    cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,255), 2)
+                        else:
+                            faces = [1]
+                            eyes_detected = 2
+                    else:
+                        # If user hasn't clicked 'Take Photo' yet, show animated driver with instructions
+                        rgb = generate_simulated_driver_frame(current_eye_state, facial_stress, frame_count)
+                        cv2.putText(rgb, "CLICK 'TAKE PHOTO' ABOVE TO SCAN REAL FACE", (20, 440), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+                        faces = [1]
+                        eyes_detected = 0 if current_eye_state == "DROWSY" else 2
+                elif using_sim:
                     rgb = generate_simulated_driver_frame(current_eye_state, facial_stress, frame_count)
                     faces = [1]
                     eyes_detected = 0 if current_eye_state == "DROWSY" else 2
                 else:
+                    # Live hardware camera stream (localhost)
                     ret, frame = cap.read()
                     if not ret:
                         using_sim = True
@@ -1597,12 +1654,12 @@ elif st.session_state["view_mode"] == "dashboard":
                         faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                         if len(faces) > 0:
                             for (x,y,w,h) in faces:
-                                cv2.rectangle(rgb, (x,y), (x+w,y+h), (100,100,100), 2)
+                                cv2.rectangle(rgb, (x,y), (x+w,y+h), (0,255,0), 2)
                                 roi_gray = gray[y:y+int(h/2), x:x+w]
                                 eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity)
-                                eyes_detected = len(eyes)
+                                eyes_detected = max(eyes_detected, len(eyes))
                                 for (ex,ey,ew,eh) in eyes:
-                                    cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,0), 2)
+                                    cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,255), 2)
                     else:
                         faces = [1]
                         eyes_detected = 2
