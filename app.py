@@ -1486,9 +1486,6 @@ elif st.session_state["view_mode"] == "dashboard":
     browser_photo = None
     with cam_col:
         st.markdown("**Driver Vision Feed**")
-        if "Browser Camera" in camera_source:
-            st.caption("📸 Allow camera permission below to scan your real face into the AI system:")
-            browser_photo = st.camera_input("Scan your face", key="browser_cam_input", label_visibility="collapsed")
         cam_place = st.empty()
         cam_status_place = st.empty()
     with map_col:
@@ -1610,32 +1607,42 @@ elif st.session_state["view_mode"] == "dashboard":
 
                 # --- B. ACQUIRE / RENDER DRIVER VISION ---
                 if browser_mode:
+                    # Browser Camera mode: use st.camera_input for real face capture
+                    # We show the camera widget INSIDE cam_place so it's inline with the feed
+                    browser_photo = cam_place.camera_input(
+                        "📸 Point camera at your face, then click **Take Photo**",
+                        key=f"live_cam_{frame_count // 5}",  # refresh widget every 5 steps
+                    )
                     if browser_photo is not None:
-                        # Process user's real face from browser camera snapshot
+                        # Decode and run eye/face detection on the real photo
                         photo_bytes = np.asarray(bytearray(browser_photo.getvalue()), dtype=np.uint8)
                         user_bgr = cv2.imdecode(photo_bytes, cv2.IMREAD_COLOR)
                         gray = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2GRAY)
+                        gray = cv2.equalizeHist(gray)
                         rgb = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2RGB)
                         faces = []
                         eyes_detected = 0
                         if cascades_available and face_cascade is not None:
-                            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-                            for (x,y,w,h) in faces:
+                            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(60,60))
+                            for (x, y, w, h) in faces:
                                 cv2.rectangle(rgb, (x,y), (x+w,y+h), (0,255,0), 3)
-                                roi_gray = gray[y:y+int(h/2), x:x+w]
-                                eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, sensitivity)
+                                eye_roi = gray[y:y+int(h*0.6), x:x+w]
+                                eyes = eye_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=3, minSize=(20,20))
                                 eyes_detected = max(eyes_detected, len(eyes))
-                                for (ex,ey,ew,eh) in eyes:
-                                    cv2.rectangle(rgb[y:y+int(h/2), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,255), 2)
+                                for (ex, ey, ew, eh) in eyes:
+                                    cv2.rectangle(rgb[y:y+int(h*0.6), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,255), 2)
                         else:
-                            faces = [1]
-                            eyes_detected = 2
+                            faces = [1]; eyes_detected = 2
+                        # Show real face with overlays
+                        eye_label = f"EYES: {eyes_detected} | {'ALERT' if eyes_detected >= 2 else 'DROWSY RISK'}"
+                        eye_col = (0,255,100) if eyes_detected >= 2 else (0,0,255)
+                        cv2.putText(rgb, eye_label, (10, rgb.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, eye_col, 2)
+                        cv2.putText(rgb, f"STATUS: {current_eye_state}", (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255) if current_eye_state=="DROWSY" else (0,255,0), 2)
+                        cam_place.image(rgb, channels="RGB", use_container_width=True)
                     else:
-                        # If user hasn't clicked 'Take Photo' yet, show animated driver with instructions
-                        rgb = generate_simulated_driver_frame(current_eye_state, facial_stress, frame_count)
-                        cv2.putText(rgb, "CLICK 'TAKE PHOTO' ABOVE TO SCAN REAL FACE", (20, 440), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
-                        faces = [1]
-                        eyes_detected = 0 if current_eye_state == "DROWSY" else 2
+                        # No photo taken yet — show a clean waiting message, NOT the cartoon
+                        cam_place.info("📸 **Take a photo above** to start real face & eye detection. The AI will analyse your alertness from your face.")
+                        faces = [1]; eyes_detected = 2  # assume alert while waiting
                 elif using_sim:
                     rgb = generate_simulated_driver_frame(current_eye_state, facial_stress, frame_count)
                     faces = [1]
@@ -2021,9 +2028,10 @@ elif st.session_state["view_mode"] == "dashboard":
                     "shout_count": audio_stress["shout_count"]
                 })
             
-                # Camera
-                cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
-                cam_place.image(rgb, channels="RGB", use_container_width=True)
+                # Camera (skip rendering if browser_mode — already rendered above with real face)
+                if not browser_mode:
+                    cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0) if current_eye_state == "DROWSY" else (0,255,0), 2)
+                    cam_place.image(rgb, channels="RGB", use_container_width=True)
                 eye_status_icon = "😴 DROWSY" if current_eye_state == "DROWSY" else f"👁 Eyes: {eyes_detected if not using_sim else '—'}"
                 eye_status_color = "#ef4444" if current_eye_state == "DROWSY" else "#10b981"
                 cam_status_place.markdown(
