@@ -31,8 +31,7 @@ The system then calculates a unified **Fusion Risk Score**, issues intelligent a
 
 ### Streamlit Application
 
-https://fusion-based-accident-predictor-git-sxessmhqxtumnmchqiw7kj.streamlit.app
-
+https://fusion-based-accident-predictor.streamlit.app
 ---
 
 # 🌿 Branches
