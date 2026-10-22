@@ -246,17 +246,38 @@ face_cascade = None
 eye_cascade = None
 cascades_available = False
 
+face_alt2_cascade = None
+eye_glasses_cascade = None
+
 try:
     if hasattr(cv2, 'data') and hasattr(cv2, 'CascadeClassifier'):
         face_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        face_alt2_path = cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml'
         eye_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
+        eye_glasses_path = cv2.data.haarcascades + 'haarcascade_eye_tree_eyeglasses.xml'
+        
         face_cascade = cv2.CascadeClassifier(face_path)
+        face_alt2_cascade = cv2.CascadeClassifier(face_alt2_path)
         eye_cascade = cv2.CascadeClassifier(eye_path)
+        eye_glasses_cascade = cv2.CascadeClassifier(eye_glasses_path)
         if not face_cascade.empty() and not eye_cascade.empty():
             cascades_available = True
 except Exception:
     cascades_available = False
 
+
+def create_adas_hud_preview():
+    """Clean professional ADAS HUD preview frame (replaces cartoon character)"""
+    frame = np.full((480, 640, 3), (18, 22, 34), dtype=np.uint8)
+    cv2.line(frame, (100, 480), (300, 260), (35, 45, 65), 2)
+    cv2.line(frame, (540, 480), (340, 260), (35, 45, 65), 2)
+    cv2.line(frame, (320, 480), (320, 280), (45, 55, 80), 1)
+    cv2.rectangle(frame, (220, 140), (420, 340), (59, 130, 246), 2)
+    cv2.circle(frame, (320, 240), 6, (59, 130, 246), -1)
+    cv2.putText(frame, "DRIVER EYE TRACKING HUD", (170, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (226, 232, 240), 2)
+    cv2.putText(frame, "STATUS: STANDBY", (240, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (52, 211, 153), 2)
+    cv2.putText(frame, "Camera ready - Click START TRIP to begin", (140, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (148, 163, 184), 1)
+    return frame
 
 def generate_simulated_driver_frame(eye_state, facial_stress, frame_num):
     """
@@ -1486,6 +1507,9 @@ elif st.session_state["view_mode"] == "dashboard":
     browser_photo = None
     with cam_col:
         st.markdown("**Driver Vision Feed**")
+        if "Browser Camera" in camera_source:
+            st.caption("📸 Allow camera access below, then click **Take Photo** to scan your face:")
+            browser_photo = st.camera_input("Scan driver face", key="browser_cam_input", label_visibility="collapsed")
         cam_place = st.empty()
         cam_status_place = st.empty()
     with map_col:
@@ -1607,101 +1631,130 @@ elif st.session_state["view_mode"] == "dashboard":
 
                 # --- B. ACQUIRE / RENDER DRIVER VISION ---
                 if browser_mode:
-                    # Browser Camera mode: use st.camera_input for real face capture
-                    # We show the camera widget INSIDE cam_place so it's inline with the feed
-                    browser_photo = cam_place.camera_input(
-                        "📸 Point camera at your face, then click **Take Photo**",
-                        key=f"live_cam_{frame_count // 5}",  # refresh widget every 5 steps
-                    )
                     if browser_photo is not None:
-                        # Decode and run eye/face detection on the real photo
                         photo_bytes = np.asarray(bytearray(browser_photo.getvalue()), dtype=np.uint8)
                         user_bgr = cv2.imdecode(photo_bytes, cv2.IMREAD_COLOR)
                         gray = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2GRAY)
-                        gray = cv2.equalizeHist(gray)
                         rgb = cv2.cvtColor(user_bgr, cv2.COLOR_BGR2RGB)
+                        
+                        # Detect face
                         faces = []
-                        eyes_detected = 0
-                        if cascades_available and face_cascade is not None:
-                            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(60,60))
-                            for (x, y, w, h) in faces:
-                                cv2.rectangle(rgb, (x,y), (x+w,y+h), (0,255,0), 3)
-                                eye_roi = gray[y:y+int(h*0.6), x:x+w]
-                                eyes = eye_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=3, minSize=(20,20))
-                                eyes_detected = max(eyes_detected, len(eyes))
+                        if face_alt2_cascade is not None and not face_alt2_cascade.empty():
+                            faces = face_alt2_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 40))
+                        if len(faces) == 0 and face_cascade is not None:
+                            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(40, 40))
+                        
+                        eyes = []
+                        if len(faces) > 0:
+                            for (x, y, w, h) in faces[:1]:
+                                cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                                eye_roi = gray[y + int(h*0.12) : y + int(h*0.60), x : x+w]
+                                eyes = eye_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
+                                if len(eyes) == 0 and eye_glasses_cascade is not None:
+                                    eyes = eye_glasses_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
                                 for (ex, ey, ew, eh) in eyes:
-                                    cv2.rectangle(rgb[y:y+int(h*0.6), x:x+w], (ex,ey), (ex+ew,ey+eh), (0,255,255), 2)
+                                    cv2.rectangle(rgb[y + int(h*0.12) : y + int(h*0.60), x : x+w], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                        
+                        # Fallback to upper frame scan if eyes not found inside face box
+                        if len(eyes) == 0:
+                            upper_gray = gray[0 : int(user_bgr.shape[0] * 0.65), :]
+                            eyes = eye_cascade.detectMultiScale(upper_gray, scaleFactor=1.15, minNeighbors=2, minSize=(18, 18))
+                            for (ex, ey, ew, eh) in eyes:
+                                cv2.rectangle(rgb[0 : int(user_bgr.shape[0] * 0.65), :], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                                
+                        eyes_detected = len(eyes)
+                        # In photo mode: 0 eyes = DROWSY, 1+ eyes = ALERT
+                        if eyes_detected == 0:
+                            current_eye_state = "DROWSY"
+                            eye_label = "EYES: CLOSED (DROWSY DETECTED)"
+                            eye_color = (0, 0, 255)
                         else:
-                            faces = [1]; eyes_detected = 2
-                        # Show real face with overlays
-                        eye_label = f"EYES: {eyes_detected} | {'ALERT' if eyes_detected >= 2 else 'DROWSY RISK'}"
-                        eye_col = (0,255,100) if eyes_detected >= 2 else (0,0,255)
-                        cv2.putText(rgb, eye_label, (10, rgb.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, eye_col, 2)
-                        cv2.putText(rgb, f"STATUS: {current_eye_state}", (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255) if current_eye_state=="DROWSY" else (0,255,0), 2)
+                            current_eye_state = "ALERT"
+                            eye_label = f"EYES: {eyes_detected} OPEN (ALERT)"
+                            eye_color = (0, 255, 100)
+                            
+                        cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
+                        status_color = (0, 0, 255) if current_eye_state == "DROWSY" else (0, 255, 0)
+                        cv2.putText(rgb, f"STATUS: {current_eye_state}", (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, status_color, 2)
                         cam_place.image(rgb, channels="RGB", use_container_width=True)
                     else:
-                        # No photo taken yet — show a clean waiting message, NOT the cartoon
-                        cam_place.info("📸 **Take a photo above** to start real face & eye detection. The AI will analyse your alertness from your face.")
-                        faces = [1]; eyes_detected = 2  # assume alert while waiting
+                        # Waiting for user to click 'Take Photo' - show clean ADAS HUD (no cartoon)
+                        hud = create_adas_hud_preview()
+                        cam_place.image(hud, channels="RGB", use_container_width=True)
+                        faces = [1]
+                        eyes_detected = 2
+                        current_eye_state = "ALERT"
                 elif using_sim:
-                    rgb = generate_simulated_driver_frame(current_eye_state, facial_stress, frame_count)
+                    hud = create_adas_hud_preview()
+                    cam_place.image(hud, channels="RGB", use_container_width=True)
                     faces = [1]
                     eyes_detected = 0 if current_eye_state == "DROWSY" else 2
                 else:
                     # Live hardware camera stream (localhost)
                     ret, frame = cap.read()
                     if not ret:
-                        using_sim = True
                         continue
-                    # Flip frame so it mirrors like a selfie camera
-                    frame = cv2.flip(frame, 1)
+                    frame = cv2.flip(frame, 1)  # Natural mirror selfie view
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    # Histogram equalization improves eye detection in varied lighting
-                    gray = cv2.equalizeHist(gray)
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
+                    # 1. Face detection (alt2 first, default fallback)
                     faces = []
-                    eyes_detected = 0
-                    if cascades_available and face_cascade is not None:
-                        # Try multiple scales for better face detection
-                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(60, 60))
-                        if len(faces) > 0:
-                            # Pick the largest face (most likely the driver)
-                            faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[:1]
-                            for (x, y, w, h) in faces:
-                                cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                                # Scan top 60% of face for eyes (avoids mouth/chin noise)
-                                eye_roi_gray = gray[y:y+int(h*0.6), x:x+w]
-                                # minNeighbors=3 is more lenient for real-world lighting
-                                eyes = eye_cascade.detectMultiScale(eye_roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
-                                eyes_detected = len(eyes)
-                                for (ex, ey, ew, eh) in eyes:
-                                    cv2.rectangle(rgb[y:y+int(h*0.6), x:x+w], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
-                            # Overlay eye count on frame
-                            eye_label = f"EYES: {eyes_detected} DETECTED" if eyes_detected > 0 else "EYES: CLOSED / NOT FOUND"
-                            eye_color = (0, 255, 100) if eyes_detected >= 2 else (0, 165, 255) if eyes_detected == 1 else (0, 0, 255)
-                            cv2.putText(rgb, eye_label, (10, rgb.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.55, eye_color, 2)
-                        else:
-                            cv2.putText(rgb, "NO FACE DETECTED - Look at camera", (10, rgb.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                    if face_alt2_cascade is not None and not face_alt2_cascade.empty():
+                        faces = face_alt2_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(35, 35))
+                    if len(faces) == 0 and face_cascade is not None:
+                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=3, minSize=(35, 35))
+                    
+                    eyes = []
+                    if len(faces) > 0:
+                        faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[:1]
+                        for (x, y, w, h) in faces:
+                            cv2.rectangle(rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                            eye_roi = gray[y + int(h * 0.12) : y + int(h * 0.60), x : x + w]
+                            eyes = eye_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
+                            if len(eyes) == 0 and eye_glasses_cascade is not None:
+                                eyes = eye_glasses_cascade.detectMultiScale(eye_roi, scaleFactor=1.1, minNeighbors=2, minSize=(15, 15))
+                            for (ex, ey, ew, eh) in eyes:
+                                cv2.rectangle(rgb[y + int(h * 0.12) : y + int(h * 0.60), x : x + w], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                    
+                    # 2. Upper-frame eye fallback (ensures eyes are found even if forehead/chin is cropped near camera edge)
+                    if len(eyes) == 0:
+                        upper_gray = gray[0 : int(frame.shape[0] * 0.65), :]
+                        eyes = eye_cascade.detectMultiScale(upper_gray, scaleFactor=1.15, minNeighbors=3, minSize=(18, 18))
+                        if len(eyes) == 0 and eye_glasses_cascade is not None:
+                            eyes = eye_glasses_cascade.detectMultiScale(upper_gray, scaleFactor=1.15, minNeighbors=2, minSize=(18, 18))
+                        for (ex, ey, ew, eh) in eyes:
+                            cv2.rectangle(rgb[0 : int(frame.shape[0] * 0.65), :], (ex, ey), (ex+ew, ey+eh), (0, 255, 255), 2)
+                    
+                    eyes_detected = len(eyes)
+                    
+                    # --- C. BUFFER LOGIC FOR DROWSINESS ---
+                    if eyes_detected >= 1:
+                        # At least one open eye detected -> Driver is ALERT
+                        drowsy_start_time = None
+                        current_eye_state = "ALERT"
+                        eye_label = f"EYES: {eyes_detected} OPEN (ALERT)"
+                        eye_color = (0, 255, 100)
                     else:
-                        faces = [1]
-                        eyes_detected = 2
+                        # 0 eyes detected -> Eyes are closed!
+                        if drowsy_start_time is None:
+                            drowsy_start_time = time.time()
+                        closed_duration = time.time() - drowsy_start_time
+                        
+                        if closed_duration >= 0.6:  # 600ms threshold for micro-sleep/drowsy
+                            current_eye_state = "DROWSY"
+                            eye_label = f"EYES: CLOSED ({closed_duration:.1f}s) - DROWSY!"
+                            eye_color = (0, 0, 255)
+                        else:
+                            eye_label = f"EYES: BLINKING ({closed_duration:.1f}s)"
+                            eye_color = (0, 165, 255)
 
-                # --- C. BUFFER LOGIC FOR DROWSINESS ---
-                # Requires eyes missing for 2 consecutive seconds before declaring DROWSY
-                if len(faces) > 0 and eyes_detected < 2:
-                    if drowsy_start_time is None:
-                        drowsy_start_time = time.time()
-                    drowsy_elapsed = time.time() - drowsy_start_time
-                    if drowsy_elapsed > 2.0:
-                        current_eye_state = "DROWSY"
-                    elif drowsy_elapsed > 0.5:
-                        # Eyes partially closed / blinking - show warning state
-                        current_eye_state = "DROWSY" if current_eye_state == "DROWSY" else "ALERT"
-                else:
-                    drowsy_start_time = None
-                    current_eye_state = "ALERT"
+                if force_drowsy:
+                    current_eye_state = "DROWSY"
+                    eye_label = "TEST MODE: FORCED DROWSY"
+                    eye_color = (0, 0, 255)
 
-                if force_drowsy: current_eye_state = "DROWSY" # --- H. DRIVER STATE (Enhanced with Stress) ---
+                # --- H. DRIVER STATE (Enhanced with Stress) ---
                 driver_state = {
                     "eye_state": current_eye_state,
                     "facial_tension": facial_stress["facial_tension"],
@@ -2116,7 +2169,7 @@ elif st.session_state["view_mode"] == "dashboard":
         audio_box.markdown("<div class='kpi-card'><div class='kpi-label'>Cabin Noise</div><div class='kpi-value'>45 dB</div></div>", unsafe_allow_html=True)
         weather_box.markdown("<div class='kpi-card'><div class='kpi-label'>Road Visibility</div><div class='kpi-value'>100%</div></div>", unsafe_allow_html=True)
 
-        preview_frame = generate_simulated_driver_frame("ALERT", {"stress_state": "CALM"}, 0)
+        preview_frame = create_adas_hud_preview()
         cam_place.image(preview_frame, channels="RGB", use_container_width=True)
         cam_status_place.markdown("<div style='text-align: center; color: #64748b; font-size: 13px; margin-top: 4px;'>⚪ Vision Feed Idle • Click 'START TRIP' to begin</div>", unsafe_allow_html=True)
 
