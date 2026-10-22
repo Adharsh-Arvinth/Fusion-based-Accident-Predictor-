@@ -11,6 +11,7 @@ import json
 from collections import deque
 import warnings
 import os
+from web_camera_component import get_live_web_camera_html
 
 # Suppress FutureWarning from deprecated google.generativeai
 warnings.filterwarnings('ignore', category=FutureWarning, module='google.generativeai')
@@ -1301,7 +1302,8 @@ st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16p
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>⚙️ Driver Monitoring Mode</h3>", unsafe_allow_html=True)
 
 camera_options = [
-    "Live Driver Webcam (Continuous Vision)",
+    "Live Web Camera (Browser Real-Time Vision)",
+    "Local Laptop Webcam (OpenCV Direct Hardware)",
     "Simulated Driver Demo (Virtual Telemetry)"
 ]
 
@@ -1309,7 +1311,7 @@ camera_source = st.sidebar.selectbox(
     "Monitoring Input",
     camera_options,
     index=0,
-    help="Select 'Live Driver Webcam' for real-time continuous eye and drowsiness tracking via your laptop webcam."
+    help="Select 'Live Web Camera' to stream and track drowsiness in real time directly in your web browser (works both on Streamlit Cloud and Localhost)."
 )
 
 st.sidebar.markdown("<h3 style='color: #2d3748; font-weight: 600; font-size: 16px;'>🧪 Simulation Scenarios</h3>", unsafe_allow_html=True)
@@ -1495,10 +1497,17 @@ elif st.session_state["view_mode"] == "dashboard":
     # MIDDLE ROW: Camera & GPS Map
     st.markdown("<div class='section-header'><span class='section-icon'>📹</span>Live Monitoring Systems</div>", unsafe_allow_html=True)
     cam_col, map_col = st.columns([1, 1])
+    is_web_cam = ("Live Web Camera" in camera_source)
     with cam_col:
         st.markdown("**Driver Vision Feed (Live Eye & Drowsiness Tracking)**")
-        cam_place = st.empty()
-        cam_status_place = st.empty()
+        if is_web_cam:
+            web_cam_html = get_live_web_camera_html(sensitivity=sensitivity)
+            components.html(web_cam_html, height=415)
+            cam_place = None
+            cam_status_place = st.empty()
+        else:
+            cam_place = st.empty()
+            cam_status_place = st.empty()
     with map_col:
         st.markdown("**GPS & Accident Zones**")
         map_place = st.empty()
@@ -1533,11 +1542,15 @@ elif st.session_state["view_mode"] == "dashboard":
         # Determine camera capture mode
         cap = None
         using_sim = False
+        is_web_cam = ("Live Web Camera" in camera_source)
         
         if "Simulated Driver" in camera_source:
             using_sim = True
+        elif is_web_cam:
+            using_sim = False
+            cap = None
         else:
-            # Live Hardware Webcam Mode: direct real-time video capture
+            # Local Laptop Webcam Mode: direct local hardware capture (localhost)
             try:
                 cap = cv2.VideoCapture(0)
                 if cap and cap.isOpened():
@@ -1555,7 +1568,7 @@ elif st.session_state["view_mode"] == "dashboard":
                 cap = None
                 
             if using_sim:
-                st.info("ℹ️ Running in ADAS virtual telemetry mode. When running locally on your laptop (`RUN_APP.bat`), your live camera will stream continuously.")
+                st.info("ℹ️ Local camera hardware not accessible. Switched to virtual telemetry mode.")
 
         step = 0
         frame_count = 0
@@ -1579,7 +1592,7 @@ elif st.session_state["view_mode"] == "dashboard":
         rgb = create_adas_hud_preview() 
 
         try:
-            while (cap and cap.isOpened()) or using_sim:
+            while (cap and cap.isOpened()) or using_sim or is_web_cam:
                 frame_count += 1
                 
                 # --- A. UPDATE SIMULATION TELEMETRY ---
@@ -1614,9 +1627,14 @@ elif st.session_state["view_mode"] == "dashboard":
                     audio_stress["shout_count"] = max(audio_stress.get("shout_count", 0), 3)
 
                 # --- B. ACQUIRE / RENDER DRIVER VISION ---
-                if using_sim:
+                if is_web_cam:
+                    # Live browser camera streams continuously via HTML5 / WebRTC above at 30 FPS!
+                    faces = [1]
+                    eyes_detected = 2
+                elif using_sim:
                     hud = create_adas_hud_preview()
-                    cam_place.image(hud, channels="RGB", use_container_width=True)
+                    if cam_place:
+                        cam_place.image(hud, channels="RGB", use_container_width=True)
                     faces = [1]
                     eyes_detected = 0 if current_eye_state == "DROWSY" else 2
                 else:
@@ -2011,13 +2029,14 @@ elif st.session_state["view_mode"] == "dashboard":
                     "shout_count": audio_stress["shout_count"]
                 })
             
-                # Camera (render real-time live vision frame)
-                if not using_sim:
+                # Camera (render real-time live vision frame if using local OpenCV)
+                if cap and cap.isOpened() and cam_place:
                     status_col = (255, 50, 50) if current_eye_state == "DROWSY" else (0, 255, 0)
                     cv2.putText(rgb, eye_label, (15, rgb.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, eye_color, 2)
                     cv2.putText(rgb, f"STATUS: {current_eye_state}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.85, status_col, 2)
                     cam_place.image(rgb, channels="RGB", use_container_width=True)
-                eye_status_icon = "😴 DROWSY" if current_eye_state == "DROWSY" else f"👁 Eyes: {eyes_detected if not using_sim else '—'}"
+                
+                eye_status_icon = "😴 DROWSY" if current_eye_state == "DROWSY" else ("👁 Live WebRTC Vision" if is_web_cam else f"👁 Eyes: {eyes_detected if not using_sim else '—'}")
                 eye_status_color = "#ef4444" if current_eye_state == "DROWSY" else "#10b981"
                 cam_status_place.markdown(
                     f"<div style='text-align: center; color: {eye_status_color}; font-weight: 600; font-size: 13px; margin-top: 4px;'>"
@@ -2030,8 +2049,8 @@ elif st.session_state["view_mode"] == "dashboard":
                     map_data = pd.DataFrame({'lat': [current_lat], 'lon': [current_lon]})
                     map_place.map(map_data, zoom=14, use_container_width=True)
             
-                # CPU-Optimized Delay: 20 FPS for local webcam; 5 FPS for cloud simulation to stay within free-tier limits
-                loop_delay = 0.05 if (cap and cap.isOpened()) else 0.20
+                # CPU-Optimized Delay: 20 FPS for local OpenCV; 2 FPS for web/cloud to stay within free-tier limits
+                loop_delay = 0.05 if (cap and cap.isOpened()) else 0.50
                 time.sleep(loop_delay)
 
                 # Check if user clicked STOP TRIP button (via session_state flag)
